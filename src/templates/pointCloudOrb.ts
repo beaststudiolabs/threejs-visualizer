@@ -1,7 +1,12 @@
-import type { TemplateContext, TemplateRuntime, VisualizerTemplate } from "../contracts/schema";
+﻿import type { TemplateContext, TemplateRuntime, VisualizerTemplate } from "../contracts/schema";
 import type { ParamSchema } from "../contracts/types";
 import { mulberry32 } from "../utils/rng";
 import * as THREE from "three";
+
+const toFiniteNumber = (value: unknown, fallback: number): number => {
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
 
 class PointCloudOrbTemplate implements VisualizerTemplate {
   readonly id = "pointCloudOrb" as const;
@@ -65,7 +70,9 @@ class PointCloudOrbTemplate implements VisualizerTemplate {
   init(ctx: TemplateContext, params: Record<string, any>): void {
     this.ctx = ctx;
 
-    const geometry = this.buildGeometry(1337, Number(params.density ?? 1800), Number(params.radius ?? 1.4));
+    const density = this.clampDensity(toFiniteNumber(params.density, 1800));
+    const radius = this.clampRadius(toFiniteNumber(params.radius, 1.4));
+    const geometry = this.buildGeometry(1337, density, radius);
     const material = new THREE.PointsMaterial({
       color: String(params.color ?? "#9ecbff"),
       size: 0.03,
@@ -79,9 +86,9 @@ class PointCloudOrbTemplate implements VisualizerTemplate {
   update(runtime: TemplateRuntime): void {
     if (!this.points) return;
 
-    const density = Number(runtime.params.density ?? 1800);
-    const radius = Number(runtime.params.radius ?? 1.4);
-    const speed = Number(runtime.params.rotationSpeed ?? 0.6);
+    const density = this.clampDensity(toFiniteNumber(runtime.params.density, 1800));
+    const radius = this.clampRadius(toFiniteNumber(runtime.params.radius, 1.4));
+    const speed = toFiniteNumber(runtime.params.rotationSpeed, 0.6);
     const color = String(runtime.params.color ?? "#9ecbff");
 
     if (this.builtForSeed !== runtime.seed) {
@@ -105,8 +112,10 @@ class PointCloudOrbTemplate implements VisualizerTemplate {
   }
 
   private buildGeometry(seed: number, density: number, radius: number): THREE.BufferGeometry {
-    const count = Math.max(200, Math.floor(density));
-    const rng = mulberry32(seed);
+    const finiteSeed = Number.isFinite(seed) ? seed : 1337;
+    const count = this.clampDensity(Math.floor(density));
+    const safeRadius = this.clampRadius(radius);
+    const rng = mulberry32(finiteSeed);
     const vertices = new Float32Array(count * 3);
 
     for (let i = 0; i < count; i += 1) {
@@ -114,7 +123,7 @@ class PointCloudOrbTemplate implements VisualizerTemplate {
       const v = rng();
       const theta = 2 * Math.PI * u;
       const phi = Math.acos(2 * v - 1);
-      const r = radius * (0.6 + 0.4 * rng());
+      const r = safeRadius * (0.6 + 0.4 * rng());
 
       vertices[i * 3] = r * Math.sin(phi) * Math.cos(theta);
       vertices[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
@@ -124,6 +133,14 @@ class PointCloudOrbTemplate implements VisualizerTemplate {
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute("position", new THREE.BufferAttribute(vertices, 3));
     return geometry;
+  }
+
+  private clampDensity(value: number): number {
+    return Math.min(10000, Math.max(200, Math.floor(value)));
+  }
+
+  private clampRadius(value: number): number {
+    return Math.min(4, Math.max(0.5, value));
   }
 }
 

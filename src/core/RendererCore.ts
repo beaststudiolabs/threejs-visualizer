@@ -1,4 +1,4 @@
-import type { TemplateRuntime, VisualizerTemplate } from "../contracts/schema";
+﻿import type { TemplateRuntime, VisualizerTemplate } from "../contracts/schema";
 import type { AudioFeatures, MidiState, MotionState } from "../contracts/types";
 import { CameraController } from "./CameraController";
 import { SceneManager } from "./SceneManager";
@@ -8,11 +8,11 @@ export type RuntimeSource = {
   getAudio: () => AudioFeatures;
   getMidi: () => MidiState;
   getMotion: () => MotionState;
-  getBaseParams: () => Record<string, number | boolean | string>;
+  getBaseParams: () => Record<string, unknown>;
   resolveParams?: (
     runtime: Omit<TemplateRuntime, "params">,
-    baseParams: Record<string, number | boolean | string>
-  ) => Record<string, number | boolean | string>;
+    baseParams: Record<string, unknown>
+  ) => Record<string, unknown>;
 };
 
 export type RendererCoreConfig = {
@@ -31,7 +31,7 @@ export class RendererCore {
   private rafId?: number;
   private template?: VisualizerTemplate;
   private seed = 1337;
-  private activeParams: Record<string, number | boolean | string> = {};
+  private activeParams: Record<string, unknown> = {};
   private lastFpsSample = performance.now();
   private framesSinceFpsSample = 0;
   private fps = 0;
@@ -48,7 +48,7 @@ export class RendererCore {
     this.resize(canvas.clientWidth || 1280, canvas.clientHeight || 720);
   }
 
-  setTemplate(template: VisualizerTemplate, params: Record<string, number | boolean | string>): void {
+  setTemplate(template: VisualizerTemplate, params: Record<string, unknown>): void {
     if (!this.sceneManager) return;
 
     this.template?.dispose();
@@ -174,3 +174,4 @@ export class RendererCore {
     this.sceneManager?.dispose();
   }
 }
+

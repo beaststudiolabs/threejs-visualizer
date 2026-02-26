@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TemplateRuntime } from "../contracts/schema";
 import type { AudioFeatures, Modulator, MotionState, MidiState, TemplateId } from "../contracts/types";
 import type * as THREE from "three";
@@ -212,14 +212,15 @@ export const App = (): JSX.Element => {
         webcamRef.current.update(1 / 60);
         return webcamRef.current.getState();
       },
-      getBaseParams: (): Record<string, number | boolean | string> => useAppStore.getState().params,
+      getBaseParams: (): Record<string, unknown> => useAppStore.getState().params,
       resolveParams: (
         runtimeBase: Omit<TemplateRuntime, "params">,
-        baseParams: Record<string, number | boolean | string>
-      ): Record<string, number | boolean | string> => {
+        baseParams: Record<string, unknown>
+      ): Record<string, unknown> => {
+        const primitiveBaseParams = baseParams as Record<string, number | boolean | string>;
         return modulatorEngineRef.current.apply(
-          baseParams,
-          { ...runtimeBase, params: baseParams },
+          primitiveBaseParams,
+          { ...runtimeBase, params: primitiveBaseParams },
           useAppStore.getState().modulators
         );
       }
@@ -550,3 +551,5 @@ export const App = (): JSX.Element => {
     />
   );
 };
+
+

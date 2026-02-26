@@ -1,4 +1,4 @@
-import type { TemplateContext, TemplateRuntime, VisualizerTemplate } from "../contracts/schema";
+﻿import type { TemplateContext, TemplateRuntime, VisualizerTemplate } from "../contracts/schema";
 import type { ParamSchema } from "../contracts/types";
 import * as THREE from "three";
 
@@ -65,7 +65,7 @@ class WireframeBlobTemplate implements VisualizerTemplate {
 
   init(ctx: TemplateContext, params: Record<string, any>): void {
     this.ctx = ctx;
-    const density = Math.max(1, Math.floor(Number(params.density) || 2));
+    const density = Math.min(5, Math.max(1, Math.floor(Number(params.density) || 2)));
     const color = String(params.color ?? "#43ffd0");
 
     const geometry = new THREE.IcosahedronGeometry(1, density);
@@ -101,3 +101,4 @@ class WireframeBlobTemplate implements VisualizerTemplate {
 }
 
 export const wireframeBlobTemplate = new WireframeBlobTemplate();
+
