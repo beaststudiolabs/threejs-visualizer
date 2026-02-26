@@ -1,4 +1,4 @@
-import type { MidiState } from "../contracts/types";
+﻿import type { MidiState } from "../contracts/types";
 
 export class MidiEngine {
   private state: MidiState = {
@@ -30,7 +30,10 @@ export class MidiEngine {
 
     this.state.connected = true;
     this.state.deviceName = input.name ?? "MIDI Input";
-    input.onmidimessage = (event: MIDIMessageEvent) => this.handleMidiMessage(event.data);
+    input.onmidimessage = (event: MIDIMessageEvent) => {
+      if (!event.data) return;
+      this.handleMidiMessage(event.data);
+    };
   }
 
   setMockEnabled(enabled: boolean): void {
@@ -47,7 +50,9 @@ export class MidiEngine {
     this.state.last = { cc, value: normalized, ts };
   }
 
-  private handleMidiMessage(data: Uint8Array): void {
+  private handleMidiMessage(data: Uint8Array | null): void {
+    if (!data) return;
+
     const [status, data1, data2] = data;
     const isCc = (status & 0xf0) === 0xb0;
     if (!isCc) return;

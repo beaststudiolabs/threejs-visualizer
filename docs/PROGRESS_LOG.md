@@ -73,3 +73,23 @@ Keep entries chronological. Each entry should capture:
   - Governance references verified with targeted text search.
 - Blockers:
   - Runtime verification remains pending until Node/pnpm/git are available.
+
+## 2026-02-26 15:19 UTC - Repo Recovery + Full Verification Pass
+
+- Stage: 0-5 (reconciliation + verification)
+- Completed:
+  - Recovered upstream git continuity by cloning `https://github.com/beaststudiolabs/threejs-visualizer` into `E:\Vibe Projects\threejs-visualizer-upstream` and creating branch `agent/reconcile/local-snapshot`.
+  - Ported local snapshot contents into the upstream clone for reconciliation.
+  - Worked around host git TLS backend issue (`schannel` credential failure) by using OpenSSL-backed git commands for remote operations.
+  - Provisioned pnpm through user-level corepack shim (`.corepack-shims\pnpm.CMD`) and installed dependencies + Playwright Chromium.
+  - Fixed strict TypeScript failures in `MidiEngine`, `RendererCore`/`App` runtime typing, and `Exporter` blob typing.
+  - Added missing lint dependency (`@eslint/js`) and corrected ESLint config behavior for TypeScript global symbols.
+  - Stabilized visual regression workflow by switching to direct canvas snapshot matching and generating baseline images.
+  - Fixed `pointCloudOrb` visual-test runtime crash (`RangeError: Invalid array length`) by clamping `wireframeBlob` density to schema bounds and hardening `pointCloudOrb` numeric sanitization.
+- Verification:
+  - `pnpm verify` passed end-to-end (`typecheck`, `lint`, `test`, `e2e`, `build`).
+  - Unit tests: 8 files / 12 tests passed.
+  - E2E tests: 6/6 passed, including 3 visual snapshot cases.
+- Blockers / follow-ups:
+  - No hard blockers for local verification.
+  - Remaining follow-up: add dedicated e2e scenario that explicitly validates model upload behavior alongside mock MIDI/Webcam interaction.
