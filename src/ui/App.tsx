@@ -489,8 +489,8 @@ export const App = (): JSX.Element => {
     typeof query.width === "number" && typeof query.height === "number"
       ? { width: `${query.width}px`, height: `${query.height}px` }
       : undefined;
-  const palmOutlinePath =
-    "M11 58C6 55 4 50 4 44V30c0-3 2-5 5-5s5 2 5 5v-16c0-3 2-5 5-5s5 2 5 5v15c0-3 2-5 5-5s5 2 5 5v-12c0-3 2-5 5-5s5 2 5 5v14c0-3 2-5 5-5s5 2 5 5v17c0 12-9 22-21 22z";
+  const fistOutlinePath =
+    "M8 50c-3-1-5-4-5-8V29c0-3 2-5 5-5s5 2 5 5v2c0-3 2-5 5-5s5 2 5 5v-1c0-3 2-5 5-5s5 2 5 5v1c0-3 2-5 5-5s5 2 5 5v11c0 7-4 13-10 15l-12 4c-3 1-5 1-8 0z";
 
   const modeIndex = Math.max(0, hud.modeNames.indexOf(hud.modeName));
 
@@ -871,21 +871,21 @@ export const App = (): JSX.Element => {
           <div
             className="palm-outline palm-outline-left"
             data-testid="left-palm-outline"
-            data-lit={String(hud.handDebug.leftTargetReady)}
+            data-lit={String(hud.handDebug.leftCalibrationReady)}
             aria-hidden="true"
           >
             <svg viewBox="0 0 52 64" focusable="false" aria-hidden="true">
-              <path d={palmOutlinePath} />
+              <path d={fistOutlinePath} />
             </svg>
           </div>
           <div
             className="palm-outline palm-outline-right"
             data-testid="right-palm-outline"
-            data-lit={String(hud.handDebug.rightTargetReady)}
+            data-lit={String(hud.handDebug.rightCalibrationReady)}
             aria-hidden="true"
           >
             <svg viewBox="0 0 52 64" focusable="false" aria-hidden="true">
-              <path d={palmOutlinePath} />
+              <path d={fistOutlinePath} />
             </svg>
           </div>
         </div>

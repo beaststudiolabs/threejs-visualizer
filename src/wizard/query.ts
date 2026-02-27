@@ -1,6 +1,6 @@
 export type WizardQueryConfig = {
   testMode: boolean;
-  trackerMode: "default" | "off" | "mockfail" | "remote";
+  trackerMode: "default" | "off" | "mockfail" | "remote" | "local";
   seed: number;
   fixedTimeSec?: number;
   width?: number;
@@ -38,6 +38,9 @@ const parseTrackerMode = (params: URLSearchParams): WizardQueryConfig["trackerMo
   }
   if (raw === "remote") {
     return "remote";
+  }
+  if (raw === "local") {
+    return "local";
   }
   return "default";
 };

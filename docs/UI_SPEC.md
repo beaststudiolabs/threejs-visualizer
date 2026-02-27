@@ -17,18 +17,19 @@ The active root experience is the Particle Wizard HUD (not the legacy dock layou
 
 ### Webcam Calibration Overlay
 
-- The calibration marker is two open-palm outlines (left/right), positioned near webcam center.
+- The calibration marker is two fist outlines (left/right), positioned near webcam center.
 - Tracked hands render a green skeleton stick overlay in mirrored webcam space for both left and right palms when landmarks are available.
 - Tracking backend uses MediaPipe Tasks Vision (GPU-preferred, CPU fallback) through the wizard adapter layer.
-- Local asset strategy is primary (`/public/mediapipe/*`); remote fallback is optional via query diagnostics.
+- Local asset strategy is primary (`/public/mediapipe/*`) with automatic remote fallback in default mode.
 - Webcam panel visibility follows camera stream availability, not tracker availability.
 - If tracker bootstrap fails but camera stream is active, webcam stays visible and status reports tracker unavailability.
 - Target checks use mirrored display space (`displayX = 1 - rawX`) so guidance matches the mirrored webcam.
-- Target anchors are intentionally separated (`x≈0.36` left, `x≈0.64` right) to improve hand placement clarity.
-- Left and right outlines light independently when each corresponding palm is inside its target zone.
+- Target anchors are intentionally separated (`x=0.36` left, `x=0.64` right) to improve hand placement clarity.
+- Left and right outlines light independently when each corresponding hand is in a fully ready calibration pose.
 - Wizard dual-hand activation requires both outlines lit for the initial `1.2s` hold window.
+- A lit outline requires three conditions: target zone alignment, fist shape, and palms facing the user.
 - After activation, the overlay stays faintly visible to support live recalibration.
-- Live recalibration is dual-hand only and triggers by holding both palms on targets for `1.5s` while wizard mode remains active.
+- Live recalibration is dual-hand only and triggers by holding both fists on targets with palms facing the user for `1.5s` while wizard mode remains active.
 
 ### Advanced Dynamics Panel
 
@@ -88,8 +89,10 @@ These URL params are applied on startup when provided:
 - Tracker diagnostics:
   - `tracker=off` forces tracker unavailable mode while keeping webcam preview active.
   - `tracker=mockfail` simulates tracker bootstrap failure.
-  - `tracker=remote` enables optional remote asset fallback.
+  - `tracker=local` forces strict local-only tracking asset boot.
+  - `tracker=remote` explicitly enables remote fallback.
 
 ## Legacy Dock UI
 
 Legacy dock/panel modules were removed in the prune pass. The wizard HUD is now the only supported UI path.
+

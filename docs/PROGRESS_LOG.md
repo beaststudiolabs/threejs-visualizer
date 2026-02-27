@@ -359,3 +359,32 @@ Keep entries chronological. Each entry should capture:
   - Retry with isolated output (`playwright-results-hands11`) fails in this environment with `spawn EPERM`.
 - Blockers:
   - Playwright execution is blocked in this environment by OS-level `EPERM` process/file permission errors.
+
+## 2026-02-27 20:10 UTC - MediaPipe Availability Default Fallback + Local Override
+
+- Stage: wizard runtime resilience
+- Completed:
+  - Extended tracker mode parsing in `src/wizard/query.ts` with `tracker=local`.
+  - Updated runtime tracker mode unions to include `local` in:
+    - `src/wizard/query.ts`
+    - `src/wizard/HandWizardController.ts`
+    - `src/wizard/ParticleWizardRuntime.ts`
+  - Changed hand tracker boot behavior in `HandWizardController` to enable remote fallback by default (`allowRemoteFallback: trackerMode !== "local"`), while preserving:
+    - `tracker=off` hard disable
+    - `tracker=mockfail` forced bootstrap failure
+  - Added unit coverage in `tests/unit/handWizardController.test.ts` to assert:
+    - default mode calls loader with `allowRemoteFallback: true`
+    - local mode calls loader with `allowRemoteFallback: false`
+  - Added `tests/unit/query.test.ts` covering tracker parsing for `default`, `local`, `remote`, `off`, and `mockfail`.
+  - Updated docs to reflect the new default behavior and diagnostics:
+    - `docs/ARCHITECTURE.md`
+    - `docs/UI_SPEC.md`
+    - `public/mediapipe/README.md`
+    - `docs/IMPLEMENTATION_STAGES.md`
+- Verification:
+  - `npm run typecheck` passes.
+  - `npm run test -- tests/unit/query.test.ts tests/unit/handWizardController.test.ts --run` passes (2 files, 19 tests).
+  - `npm run test -- --run` passes (4 files, 31 tests).
+  - `npm run build` passes.
+- Blockers:
+  - None.

@@ -3,6 +3,8 @@ import {
   computeFingerCurls,
   computeModePosition,
   computeSharedRatio,
+  isBackOfHandFacingCamera,
+  isCalibrationFist,
   resolveSharedParticleAssignment,
   evaluateDualPalmTargets,
   isCalibrationCenter,
@@ -15,6 +17,54 @@ import {
   smoothHandState,
   updateCalibrationTimer
 } from "../../src/wizard/math";
+
+const createGestureLandmarks = (
+  role: "left" | "right",
+  pose: "fist" | "open",
+  facing: "self" | "camera"
+): Array<{ x: number; y: number; z: number }> => {
+  const landmarks = Array.from({ length: 21 }, () => ({ x: 0.5, y: 0.5, z: 0 }));
+  const palmX = 0.5;
+  const palmY = 0.52;
+  landmarks[0] = { x: palmX, y: palmY + 0.2, z: 0 };
+  landmarks[9] = { x: palmX, y: palmY, z: 0 };
+
+  const indexOnRight = facing === "self" ? role === "left" : role === "right";
+  const indexMcpX = palmX + (indexOnRight ? 0.08 : -0.08);
+  const pinkyMcpX = palmX + (indexOnRight ? -0.08 : 0.08);
+  const ringMcpX = (palmX + pinkyMcpX) / 2;
+  const thumbMcpX = palmX + (role === "left" ? -0.11 : 0.11);
+  const curled = pose === "fist";
+
+  const setFingerChain = (
+    mcpIndex: number,
+    pipIndex: number,
+    dipIndex: number,
+    tipIndex: number,
+    mcpX: number,
+    mcpY: number
+  ): void => {
+    landmarks[mcpIndex] = { x: mcpX, y: mcpY, z: 0 };
+    if (curled) {
+      landmarks[pipIndex] = { x: mcpX + 0.01, y: mcpY - 0.06, z: 0 };
+      landmarks[dipIndex] = { x: mcpX + 0.03, y: mcpY - 0.1, z: 0 };
+      landmarks[tipIndex] = { x: mcpX + 0.005, y: mcpY - 0.02, z: 0 };
+      return;
+    }
+
+    landmarks[pipIndex] = { x: mcpX, y: mcpY - 0.06, z: 0 };
+    landmarks[dipIndex] = { x: mcpX, y: mcpY - 0.12, z: 0 };
+    landmarks[tipIndex] = { x: mcpX, y: mcpY - 0.18, z: 0 };
+  };
+
+  setFingerChain(1, 2, 3, 4, thumbMcpX, palmY + 0.02);
+  setFingerChain(5, 6, 7, 8, indexMcpX, palmY - 0.02);
+  setFingerChain(9, 10, 11, 12, palmX, palmY);
+  setFingerChain(13, 14, 15, 16, ringMcpX, palmY - 0.015);
+  setFingerChain(17, 18, 19, 20, pinkyMcpX, palmY - 0.02);
+
+  return landmarks;
+};
 
 describe("wizard math helpers", () => {
   it("tracks calibration center and activation timing", () => {
@@ -58,6 +108,24 @@ describe("wizard math helpers", () => {
     expect(neither.leftTargetReady).toBe(false);
     expect(neither.rightTargetReady).toBe(false);
     expect(neither.inCenter).toBe(false);
+  });
+
+  it("detects calibration fists with loose curl thresholds", () => {
+    expect(isCalibrationFist(createGestureLandmarks("left", "fist", "self"))).toBe(true);
+    expect(isCalibrationFist(createGestureLandmarks("left", "open", "self"))).toBe(false);
+  });
+
+  it("detects back-of-hand orientation for each hand role", () => {
+    const leftSelf = createGestureLandmarks("left", "fist", "self");
+    const leftCamera = createGestureLandmarks("left", "fist", "camera");
+    const rightSelf = createGestureLandmarks("right", "fist", "self");
+    const rightCamera = createGestureLandmarks("right", "fist", "camera");
+
+    expect(isBackOfHandFacingCamera(leftSelf, "left")).toBe(true);
+    expect(isBackOfHandFacingCamera(leftCamera, "left")).toBe(false);
+    expect(isBackOfHandFacingCamera(rightSelf, "right")).toBe(true);
+    expect(isBackOfHandFacingCamera(rightCamera, "right")).toBe(false);
+    expect(isBackOfHandFacingCamera(undefined, "left")).toBe(false);
   });
 
   it("maps and smooths hand offsets", () => {

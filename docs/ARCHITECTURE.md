@@ -45,7 +45,12 @@
   - `vision_bundle.js`
   - `wasm/*`
   - `hand_landmarker.task`
-- Remote fallback is optional and disabled by default; it is enabled only via query diagnostics (`tracker=remote`).
+- Runtime is local-first with automatic remote fallback enabled by default.
+- Tracker query diagnostics and overrides:
+  - `tracker=local` forces strict local-only asset loading (no remote fallback)
+  - `tracker=remote` explicitly allows remote fallback (same effective behavior as default)
+  - `tracker=off` forces tracking unavailable mode
+  - `tracker=mockfail` simulates bootstrap failure
 
 ## Audio Path
 

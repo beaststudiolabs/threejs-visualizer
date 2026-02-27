@@ -14,10 +14,77 @@ const createPalmLandmarks = (x: number, y: number, z = 0): LegacyLandmark[] => {
   return landmarks;
 };
 
-const createDualResults = (leftRawX: number, leftY: number, rightRawX: number, rightY: number): LegacyHandsResults => ({
-  multiHandLandmarks: [createPalmLandmarks(leftRawX, leftY), createPalmLandmarks(rightRawX, rightY)],
+type CalibrationPose = "fist" | "open";
+type CalibrationFacing = "self" | "camera";
+
+const createCalibrationLandmarks = (
+  rawX: number,
+  y: number,
+  role: "left" | "right",
+  pose: CalibrationPose = "fist",
+  facing: CalibrationFacing = "self"
+): LegacyLandmark[] => {
+  const landmarks = createPalmLandmarks(rawX, y);
+  landmarks[0] = { x: rawX, y: y + 0.2, z: 0 };
+
+  const indexOnRight = facing === "self" ? role === "left" : role === "right";
+  const indexMcpX = rawX + (indexOnRight ? 0.08 : -0.08);
+  const pinkyMcpX = rawX + (indexOnRight ? -0.08 : 0.08);
+  const ringMcpX = (rawX + pinkyMcpX) / 2;
+  const thumbMcpX = rawX + (role === "left" ? -0.11 : 0.11);
+  const curled = pose === "fist";
+
+  const setFingerChain = (
+    mcpIndex: number,
+    pipIndex: number,
+    dipIndex: number,
+    tipIndex: number,
+    mcpX: number,
+    mcpY: number
+  ): void => {
+    landmarks[mcpIndex] = { x: mcpX, y: mcpY, z: 0 };
+    if (curled) {
+      landmarks[pipIndex] = { x: mcpX + 0.01, y: mcpY - 0.06, z: 0 };
+      landmarks[dipIndex] = { x: mcpX + 0.03, y: mcpY - 0.1, z: 0 };
+      landmarks[tipIndex] = { x: mcpX + 0.005, y: mcpY - 0.02, z: 0 };
+      return;
+    }
+
+    landmarks[pipIndex] = { x: mcpX, y: mcpY - 0.06, z: 0 };
+    landmarks[dipIndex] = { x: mcpX, y: mcpY - 0.12, z: 0 };
+    landmarks[tipIndex] = { x: mcpX, y: mcpY - 0.18, z: 0 };
+  };
+
+  setFingerChain(1, 2, 3, 4, thumbMcpX, y + 0.02);
+  setFingerChain(5, 6, 7, 8, indexMcpX, y - 0.02);
+  setFingerChain(9, 10, 11, 12, rawX, y);
+  setFingerChain(13, 14, 15, 16, ringMcpX, y - 0.015);
+  setFingerChain(17, 18, 19, 20, pinkyMcpX, y - 0.02);
+
+  return landmarks;
+};
+
+const createDualGestureResults = (
+  leftRawX: number,
+  leftY: number,
+  rightRawX: number,
+  rightY: number,
+  options?: {
+    leftPose?: CalibrationPose;
+    rightPose?: CalibrationPose;
+    leftFacing?: CalibrationFacing;
+    rightFacing?: CalibrationFacing;
+  }
+): LegacyHandsResults => ({
+  multiHandLandmarks: [
+    createCalibrationLandmarks(leftRawX, leftY, "left", options?.leftPose ?? "fist", options?.leftFacing ?? "self"),
+    createCalibrationLandmarks(rightRawX, rightY, "right", options?.rightPose ?? "fist", options?.rightFacing ?? "self")
+  ],
   multiHandedness: [{ label: "Left" }, { label: "Right" }]
 });
+
+const createDualResults = (leftRawX: number, leftY: number, rightRawX: number, rightY: number): LegacyHandsResults =>
+  createDualGestureResults(leftRawX, leftY, rightRawX, rightY);
 
 const createSingleResults = (rawX: number, y: number): LegacyHandsResults => ({
   multiHandLandmarks: [createPalmLandmarks(rawX, y)],
@@ -76,6 +143,46 @@ afterEach(() => {
 });
 
 describe("HandWizardController init fallback behavior", () => {
+  it("enables remote fallback in default tracker mode", async () => {
+    const stream = createMockStream();
+    const video = document.createElement("video");
+    vi.spyOn(video, "play").mockResolvedValue(undefined);
+    installMediaDevicesMock(async () => stream);
+
+    const loadSpy = vi.spyOn(legacyMediaPipe, "loadLegacyMediaPipe").mockResolvedValue({
+      ok: false,
+      errorCode: "assets-load-failed"
+    });
+
+    const controller = new HandWizardController({ testMode: false, trackerMode: "default", video });
+    await controller.init();
+
+    expect(loadSpy).toHaveBeenCalledWith({
+      allowRemoteFallback: true,
+      forceFailure: false
+    });
+  });
+
+  it("disables remote fallback in local tracker mode", async () => {
+    const stream = createMockStream();
+    const video = document.createElement("video");
+    vi.spyOn(video, "play").mockResolvedValue(undefined);
+    installMediaDevicesMock(async () => stream);
+
+    const loadSpy = vi.spyOn(legacyMediaPipe, "loadLegacyMediaPipe").mockResolvedValue({
+      ok: false,
+      errorCode: "assets-load-failed"
+    });
+
+    const controller = new HandWizardController({ testMode: false, trackerMode: "local", video });
+    await controller.init();
+
+    expect(loadSpy).toHaveBeenCalledWith({
+      allowRemoteFallback: false,
+      forceFailure: false
+    });
+  });
+
   it("keeps webcam visible when tracker bootstrap fails after camera stream succeeds", async () => {
     const stream = createMockStream();
     const video = document.createElement("video");
@@ -177,6 +284,10 @@ describe("HandWizardController calibration overlay telemetry", () => {
     expect(state.overlayOpacity).toBe(OVERLAY_READY_OPACITY);
     expect(state.debug.leftTargetReady).toBe(true);
     expect(state.debug.rightTargetReady).toBe(false);
+    expect(state.debug.leftGestureReady).toBe(true);
+    expect(state.debug.rightGestureReady).toBe(true);
+    expect(state.debug.leftCalibrationReady).toBe(true);
+    expect(state.debug.rightCalibrationReady).toBe(false);
     expect(state.debug.inCenter).toBe(false);
     expect(state.debug.calibrationTimerMs).toBe(0);
     expect(state.debug.palms).toHaveLength(2);
@@ -200,10 +311,66 @@ describe("HandWizardController calibration overlay telemetry", () => {
     expect(state.overlayOpacity).toBe(OVERLAY_ACTIVE_FAINT_OPACITY);
     expect(state.debug.leftTargetReady).toBe(true);
     expect(state.debug.rightTargetReady).toBe(true);
+    expect(state.debug.leftGestureReady).toBe(true);
+    expect(state.debug.rightGestureReady).toBe(true);
+    expect(state.debug.leftCalibrationReady).toBe(true);
+    expect(state.debug.rightCalibrationReady).toBe(true);
     expect(state.debug.calibrationTimerMs).toBe(0);
     expect(state.debug.palms).toHaveLength(2);
     expect(state.debug.palms[0].landmarks).toHaveLength(21);
     expect(state.debug.palms[1].landmarks).toHaveLength(21);
+  });
+
+  it("does not activate with open hands in target zones", () => {
+    const controller = new HandWizardController({ testMode: false, trackerMode: "default", video: document.createElement("video") });
+
+    for (let i = 0; i < 90; i += 1) {
+      pushResults(
+        controller,
+        createDualGestureResults(LEFT_TARGET_RAW_X, 0.5, RIGHT_TARGET_RAW_X, 0.5, {
+          leftPose: "open",
+          rightPose: "open"
+        })
+      );
+    }
+
+    const state = controller.getUiState();
+    expect(state.handMode).toBe("none");
+    expect(state.handTrackingState).toBe("ready");
+    expect(state.wizardActive).toBe(false);
+    expect(state.debug.leftTargetReady).toBe(true);
+    expect(state.debug.rightTargetReady).toBe(true);
+    expect(state.debug.leftGestureReady).toBe(false);
+    expect(state.debug.rightGestureReady).toBe(false);
+    expect(state.debug.leftCalibrationReady).toBe(false);
+    expect(state.debug.rightCalibrationReady).toBe(false);
+    expect(state.debug.calibrationTimerMs).toBe(0);
+  });
+
+  it("does not activate with fists facing camera", () => {
+    const controller = new HandWizardController({ testMode: false, trackerMode: "default", video: document.createElement("video") });
+
+    for (let i = 0; i < 90; i += 1) {
+      pushResults(
+        controller,
+        createDualGestureResults(LEFT_TARGET_RAW_X, 0.5, RIGHT_TARGET_RAW_X, 0.5, {
+          leftFacing: "camera",
+          rightFacing: "camera"
+        })
+      );
+    }
+
+    const state = controller.getUiState();
+    expect(state.handMode).toBe("none");
+    expect(state.handTrackingState).toBe("ready");
+    expect(state.wizardActive).toBe(false);
+    expect(state.debug.leftTargetReady).toBe(true);
+    expect(state.debug.rightTargetReady).toBe(true);
+    expect(state.debug.leftGestureReady).toBe(false);
+    expect(state.debug.rightGestureReady).toBe(false);
+    expect(state.debug.leftCalibrationReady).toBe(false);
+    expect(state.debug.rightCalibrationReady).toBe(false);
+    expect(state.debug.calibrationTimerMs).toBe(0);
   });
 
   it("resets hold timer and readiness when palms leave target zones", () => {
@@ -226,6 +393,8 @@ describe("HandWizardController calibration overlay telemetry", () => {
     expect(state.debug.calibrationTimerMs).toBe(0);
     expect(state.debug.leftTargetReady).toBe(false);
     expect(state.debug.rightTargetReady).toBe(false);
+    expect(state.debug.leftCalibrationReady).toBe(false);
+    expect(state.debug.rightCalibrationReady).toBe(false);
     expect(state.debug.inCenter).toBe(false);
   });
 
@@ -254,6 +423,41 @@ describe("HandWizardController calibration overlay telemetry", () => {
     expect(internals.neutralRight.x).toBeCloseTo(0.32, 5);
     expect(internals.recalibrationLatched).toBe(true);
     expect(internals.recalibrationTimerMs).toBe(0);
+  });
+
+  it("requires fist orientation for live recalibration while active", () => {
+    const controller = new HandWizardController({ testMode: false, trackerMode: "default", video: document.createElement("video") });
+
+    for (let i = 0; i < 76; i += 1) {
+      pushResults(controller, createDualResults(LEFT_TARGET_RAW_X, 0.5, RIGHT_TARGET_RAW_X, 0.5));
+    }
+
+    const internals = getInternals(controller);
+    const initialLeftNeutralX = internals.neutralLeft.x;
+    const initialRightNeutralX = internals.neutralRight.x;
+
+    for (let i = 0; i < 95; i += 1) {
+      pushResults(
+        controller,
+        createDualGestureResults(0.68, 0.56, 0.32, 0.56, {
+          leftFacing: "camera",
+          rightFacing: "camera"
+        })
+      );
+    }
+
+    expect(internals.neutralLeft.x).toBeCloseTo(initialLeftNeutralX, 5);
+    expect(internals.neutralRight.x).toBeCloseTo(initialRightNeutralX, 5);
+    expect(internals.recalibrationLatched).toBe(false);
+    expect(internals.recalibrationTimerMs).toBe(0);
+
+    for (let i = 0; i < 95; i += 1) {
+      pushResults(controller, createDualResults(0.68, 0.56, 0.32, 0.56));
+    }
+
+    expect(internals.neutralLeft.x).toBeCloseTo(0.68, 5);
+    expect(internals.neutralRight.x).toBeCloseTo(0.32, 5);
+    expect(internals.recalibrationLatched).toBe(true);
   });
 
   it("recalibration latch triggers once per continuous hold and re-arms after leaving target", () => {
@@ -305,6 +509,10 @@ describe("HandWizardController calibration overlay telemetry", () => {
     expect(state.debug.palms[0].landmarks?.[9]).toMatchObject({ x: 0.52, y: 0.47, z: 0 });
     expect(state.debug.leftTargetReady).toBe(false);
     expect(state.debug.rightTargetReady).toBe(false);
+    expect(state.debug.leftGestureReady).toBe(false);
+    expect(state.debug.rightGestureReady).toBe(false);
+    expect(state.debug.leftCalibrationReady).toBe(false);
+    expect(state.debug.rightCalibrationReady).toBe(false);
     expect(state.debug.calibrationTimerMs).toBe(0);
     expect(state.debug.singleRole).toBe("left");
 

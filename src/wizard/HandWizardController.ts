@@ -2,6 +2,8 @@ import {
   createZeroFingerCurls,
   computeFingerCurls,
   evaluateDualPalmTargets,
+  isBackOfHandFacingCamera,
+  isCalibrationFist,
   mirrorWebcamX,
   mapLeftHandPose,
   mapRightHandPose,
@@ -45,6 +47,10 @@ export type HandDebugInfo = {
   inCenter: boolean;
   leftTargetReady: boolean;
   rightTargetReady: boolean;
+  leftGestureReady: boolean;
+  rightGestureReady: boolean;
+  leftCalibrationReady: boolean;
+  rightCalibrationReady: boolean;
   calibrationTimerMs: number;
   mappedOffset: Vec3;
   mappedScale: number;
@@ -77,7 +83,7 @@ export type HandWizardUiState = {
 
 type HandWizardControllerConfig = {
   testMode: boolean;
-  trackerMode: "default" | "off" | "mockfail" | "remote";
+  trackerMode: "default" | "off" | "mockfail" | "remote" | "local";
   video: HTMLVideoElement;
   onStateChange?: (state: HandWizardUiState) => void;
 };
@@ -89,9 +95,9 @@ const OVERLAY_READY_OPACITY = 0.35;
 const OVERLAY_HOLD_OPACITY = 0.85;
 const OVERLAY_ACTIVE_FAINT_OPACITY = 0.22;
 
-const INACTIVE_STATUS = "Align both palms with the outlines to calibrate wizard.";
-const CALIBRATING_STATUS = "Hold both palms on the outlines to calibrate...";
-const RECALIBRATING_STATUS = "Hold both palms on the outlines to recalibrate...";
+const INACTIVE_STATUS = "Align two fists (palms facing you) with the outlines to calibrate wizard.";
+const CALIBRATING_STATUS = "Hold two fists (palms facing you) on the outlines to calibrate...";
+const RECALIBRATING_STATUS = "Hold two fists (palms facing you) on the outlines to recalibrate...";
 const ACTIVE_DUAL_STATUS = "WIZARD MODE ACTIVE - Dual-hand sculpting.";
 const ACTIVE_SINGLE_STATUS = "Single-hand fallback active.";
 const WAIT_SINGLE_STATUS = "Single hand seen - hold steady to enter fallback.";
@@ -109,6 +115,10 @@ const DEFAULT_DEBUG_INFO: HandDebugInfo = {
   inCenter: false,
   leftTargetReady: false,
   rightTargetReady: false,
+  leftGestureReady: false,
+  rightGestureReady: false,
+  leftCalibrationReady: false,
+  rightCalibrationReady: false,
   calibrationTimerMs: 0,
   mappedOffset: { x: 0, y: 0, z: 0 },
   mappedScale: 0,
@@ -125,7 +135,7 @@ const DEFAULT_DEBUG_INFO: HandDebugInfo = {
 
 export class HandWizardController {
   private readonly testMode: boolean;
-  private readonly trackerMode: "default" | "off" | "mockfail" | "remote";
+  private readonly trackerMode: "default" | "off" | "mockfail" | "remote" | "local";
   private readonly video: HTMLVideoElement;
   private readonly onStateChange?: (state: HandWizardUiState) => void;
 
@@ -207,7 +217,11 @@ export class HandWizardController {
           ],
           inCenter: true,
           leftTargetReady: true,
-          rightTargetReady: true
+          rightTargetReady: true,
+          leftGestureReady: true,
+          rightGestureReady: true,
+          leftCalibrationReady: true,
+          rightCalibrationReady: true
         }
       };
       this.emitState();
@@ -244,7 +258,7 @@ export class HandWizardController {
     }
 
     const api = await loadLegacyMediaPipe({
-      allowRemoteFallback: this.trackerMode === "remote",
+      allowRemoteFallback: this.trackerMode !== "local",
       forceFailure: this.trackerMode === "mockfail"
     });
     if (!api.ok) {
@@ -393,6 +407,10 @@ export class HandWizardController {
       this.uiState.debug.inCenter = false;
       this.uiState.debug.leftTargetReady = false;
       this.uiState.debug.rightTargetReady = false;
+      this.uiState.debug.leftGestureReady = false;
+      this.uiState.debug.rightGestureReady = false;
+      this.uiState.debug.leftCalibrationReady = false;
+      this.uiState.debug.rightCalibrationReady = false;
       this.calibTimerMs = 0;
       this.recalibrationTimerMs = 0;
       this.recalibrationLatched = false;
@@ -501,6 +519,10 @@ export class HandWizardController {
       inCenter: false,
       leftTargetReady: false,
       rightTargetReady: false,
+      leftGestureReady: false,
+      rightGestureReady: false,
+      leftCalibrationReady: false,
+      rightCalibrationReady: false,
       calibrationTimerMs: 0,
       mappedOffset: { x: 0, y: 0, z: 0 },
       mappedScale: 0,
@@ -587,6 +609,10 @@ export class HandWizardController {
         inCenter: false,
         leftTargetReady: false,
         rightTargetReady: false,
+        leftGestureReady: false,
+        rightGestureReady: false,
+        leftCalibrationReady: false,
+        rightCalibrationReady: false,
         mappedOffsetLeft: { x: 0, y: 0, z: 0 },
         mappedScaleLeft: 0,
         mappedOffsetRight: { x: 0, y: 0, z: 0 },
@@ -660,6 +686,10 @@ export class HandWizardController {
         inCenter: false,
         leftTargetReady: false,
         rightTargetReady: false,
+        leftGestureReady: false,
+        rightGestureReady: false,
+        leftCalibrationReady: false,
+        rightCalibrationReady: false,
         calibrationTimerMs: 0,
         mappedOffsetLeft: { x: 0, y: 0, z: 0 },
         mappedScaleLeft: 0,
@@ -703,6 +733,10 @@ export class HandWizardController {
         inCenter: false,
         leftTargetReady: false,
         rightTargetReady: false,
+        leftGestureReady: false,
+        rightGestureReady: false,
+        leftCalibrationReady: false,
+        rightCalibrationReady: false,
         calibrationTimerMs: 0,
         singleRole
       };
@@ -778,7 +812,11 @@ export class HandWizardController {
     const centerX = (leftPalm.x + rightPalm.x) / 2;
     const centerY = (leftPalm.y + rightPalm.y) / 2;
     const targetState = evaluateDualPalmTargets(leftPalm, rightPalm);
-    const inCenter = targetState.inCenter;
+    const leftGestureReady = isCalibrationFist(leftPalm.landmarks) && isBackOfHandFacingCamera(leftPalm.landmarks, "left");
+    const rightGestureReady = isCalibrationFist(rightPalm.landmarks) && isBackOfHandFacingCamera(rightPalm.landmarks, "right");
+    const leftCalibrationReady = targetState.leftTargetReady && leftGestureReady;
+    const rightCalibrationReady = targetState.rightTargetReady && rightGestureReady;
+    const inCenter = leftCalibrationReady && rightCalibrationReady;
 
     this.uiState.debug = {
       ...this.uiState.debug,
@@ -792,6 +830,10 @@ export class HandWizardController {
       inCenter,
       leftTargetReady: targetState.leftTargetReady,
       rightTargetReady: targetState.rightTargetReady,
+      leftGestureReady,
+      rightGestureReady,
+      leftCalibrationReady,
+      rightCalibrationReady,
       calibrationTimerMs: this.calibTimerMs,
       singleRole: undefined
     };

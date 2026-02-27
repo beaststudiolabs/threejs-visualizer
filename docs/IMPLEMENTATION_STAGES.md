@@ -48,6 +48,7 @@ All agents must update stage and step status here as work progresses.
 - [x] Replace circular webcam calibration marker with dual left/right palm outlines and per-palm readiness lighting
 - [x] Keep palm outlines faintly visible post-activation and support 1.5s live dual-hand recalibration
 - [x] Migrate hand tracking runtime to MediaPipe Tasks Vision adapter (GPU-preferred with CPU fallback)
+- [x] Enable default local-first MediaPipe remote fallback with `tracker=local` strict-local override
 - [x] Add per-parameter MIDI/Webcam/Audio control toggles with auto-modulator IDs
 - [x] Extend modulation runtime for non-number params (boolean/select/color)
 - [ ] Verify e2e behavior for mock MIDI/Webcam/model upload (model upload scenario not yet covered by Playwright fixture)

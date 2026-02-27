@@ -215,6 +215,43 @@ export const computeFingerCurls = (landmarks?: Vec3[]): FingerCurls => {
   };
 };
 
+const CALIBRATION_FIST_MIN_NON_THUMB_AVERAGE = 0.5;
+const CALIBRATION_FIST_MIN_NON_THUMB_CURLED = 0.44;
+const CALIBRATION_FIST_MIN_NON_THUMB_CURLED_COUNT = 3;
+const CALIBRATION_FIST_MIN_THUMB_CURL = 0.18;
+const BACK_OF_HAND_TOLERANCE_X = 0.01;
+
+export const isCalibrationFist = (landmarks?: Vec3[]): boolean => {
+  const curls = computeFingerCurls(landmarks);
+  const nonThumbCurls = [curls.index, curls.middle, curls.ring, curls.pinky];
+  const nonThumbAverage = nonThumbCurls.reduce((sum, value) => sum + value, 0) / nonThumbCurls.length;
+  const nonThumbCurledCount = nonThumbCurls.filter((value) => value >= CALIBRATION_FIST_MIN_NON_THUMB_CURLED).length;
+
+  return (
+    nonThumbAverage >= CALIBRATION_FIST_MIN_NON_THUMB_AVERAGE &&
+    nonThumbCurledCount >= CALIBRATION_FIST_MIN_NON_THUMB_CURLED_COUNT &&
+    curls.thumb >= CALIBRATION_FIST_MIN_THUMB_CURL
+  );
+};
+
+export const isBackOfHandFacingCamera = (landmarks: Vec3[] | undefined, role: "left" | "right"): boolean => {
+  if (!landmarks || landmarks.length < 18) {
+    return false;
+  }
+  const indexMcp = landmarks[5];
+  const pinkyMcp = landmarks[17];
+  if (!indexMcp || !pinkyMcp) {
+    return false;
+  }
+
+  const deltaX = indexMcp.x - pinkyMcp.x;
+  if (Math.abs(deltaX) < BACK_OF_HAND_TOLERANCE_X) {
+    return false;
+  }
+
+  return role === "left" ? deltaX > 0 : deltaX < 0;
+};
+
 export const smoothFingerCurls = (current: FingerCurls, target: FingerCurls, lerp = 0.22): FingerCurls => {
   const amount = clamp01(lerp);
   const keep = 1 - amount;

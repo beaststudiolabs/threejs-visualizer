@@ -81,6 +81,10 @@ const DEFAULT_HAND_DEBUG: HandDebugInfo = {
   inCenter: false,
   leftTargetReady: false,
   rightTargetReady: false,
+  leftGestureReady: false,
+  rightGestureReady: false,
+  leftCalibrationReady: false,
+  rightCalibrationReady: false,
   calibrationTimerMs: 0,
   mappedOffset: { x: 0, y: 0, z: 0 },
   mappedScale: 0,
@@ -100,7 +104,7 @@ const DEFAULT_HAND_UI_STATE: HandWizardUiState = {
   webcamVisible: true,
   overlayOpacity: 0.35,
   wizardActive: false,
-  statusText: "Align both palms with the outlines to calibrate wizard.",
+  statusText: "Align two fists (palms facing you) with the outlines to calibrate wizard.",
   statusColor: "#00ffff",
   cameraState: "active",
   trackingStateDetail: undefined,
@@ -178,7 +182,7 @@ export type ParticleWizardRuntimeConfig = {
   canvas: HTMLCanvasElement;
   video: HTMLVideoElement;
   testMode: boolean;
-  trackerMode: "default" | "off" | "mockfail" | "remote";
+  trackerMode: "default" | "off" | "mockfail" | "remote" | "local";
   seed: number;
   fixedTimeSec?: number;
   width?: number;
