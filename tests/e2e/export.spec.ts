@@ -13,10 +13,13 @@ test("wizard controls: transform cycles mode and mic can activate", async ({ pag
   await expect(modeSelect.locator("option")).toHaveCount(11);
   await modeSelect.selectOption({ label: "PARTICLE HANDS" });
   await expect(page.getByTestId("mode-value")).toHaveText("PARTICLE HANDS");
+  await expect(page.getByTestId("wizard-status")).toContainText("ACTIVE");
+  await expect(page.getByTestId("hud-root")).toContainText("Hand Mode DUAL");
   await page.getByTestId("transform-btn").click();
   await expect(page.getByTestId("mode-value")).toHaveText("SPHERICAL");
   await modeSelect.selectOption({ label: "PARTICLE HANDS" });
   await expect(page.getByTestId("mode-value")).toHaveText("PARTICLE HANDS");
+  await expect(page.getByTestId("wizard-status")).toContainText("ACTIVE");
   await page.getByTestId("transform-btn").click();
   await expect(page.getByTestId("mode-value")).toHaveText("SPHERICAL");
 

@@ -352,7 +352,8 @@ const computeHandRotation = (landmarks: Vec3[] | undefined): HandRotation | unde
 export const mapHandRotationPose = (
   landmarks: Vec3[] | undefined,
   neutralLandmarks: Vec3[] | undefined,
-  role: "left" | "right"
+  role: "left" | "right",
+  mirrorByRole = true
 ): HandRotation => {
   const current = computeHandRotation(landmarks);
   const neutral = computeHandRotation(neutralLandmarks);
@@ -360,7 +361,7 @@ export const mapHandRotationPose = (
     return { x: 0, y: 0, z: 0 };
   }
 
-  const mirrorSign = role === "left" ? 1 : -1;
+  const mirrorSign = mirrorByRole && role === "right" ? -1 : 1;
   return {
     x: normalizeAngle(current.x - neutral.x),
     y: normalizeAngle((current.y - neutral.y) * mirrorSign),
@@ -843,8 +844,8 @@ export const computeModePosition = (mode: number, t: number, a: number, b: numbe
   }
 
   const pitchBase = isThumb ? 0.42 : 0.55;
-  const pitchMid = pitchBase + curlEase * 0.8;
-  const pitchTip = pitchBase + 1.02 + curlEase * 1.18;
+  const pitchMid = pitchBase + curlEase * 1.05;
+  const pitchTip = pitchBase + 1.08 + curlEase * 1.45;
   const yaw = isThumb ? -0.74 : 0;
 
   const bone1 = {

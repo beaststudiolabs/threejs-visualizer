@@ -236,10 +236,13 @@ describe("wizard math helpers", () => {
     const neutralRight = createRotationLandmarks({ x: 0, y: 0, z: 0 }, "right");
     const rotatedRight = createRotationLandmarks({ x: 0.25, y: -0.21, z: 0.3 }, "right");
     const rightDelta = mapHandRotationPose(rotatedRight, neutralRight, "right");
+    const rightUnmirrored = mapHandRotationPose(rotatedRight, neutralRight, "right", false);
 
     expect(rightDelta.x).toBeGreaterThan(0.15);
     expect(rightDelta.y).toBeLessThan(-0.12);
     expect(rightDelta.z).toBeGreaterThan(0.12);
+    expect(rightUnmirrored.y * rightDelta.y).toBeLessThan(0);
+    expect(rightUnmirrored.z * rightDelta.z).toBeLessThan(0);
   });
 
   it("returns zero rotation for missing landmarks", () => {

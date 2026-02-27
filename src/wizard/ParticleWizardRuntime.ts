@@ -7,6 +7,7 @@ import { mulberry32 } from "../utils/rng";
 import {
   HandWizardController,
   type CameraState,
+  type HandControlProfile,
   type HandDebugInfo,
   type HandMode,
   type HandTrackingState,
@@ -57,6 +58,9 @@ const PARTICLE_HANDS_FLOAT_LIFT = 0.16;
 const PARTICLE_HANDS_FLOAT_ORBIT = 0.24;
 const PARTICLE_HANDS_FLOAT_NOISE = 0.06;
 const PARTICLE_HANDS_FLOAT_RADIAL = 0.22;
+const PARTICLE_HANDS_BASE_ROT_X = -0.22;
+const PARTICLE_HANDS_BASE_ROT_Y = 0.0;
+const PARTICLE_HANDS_BASE_ROT_Z = 0.0;
 
 export type VisualTuning = {
   bloomStrength: number;
@@ -347,6 +351,18 @@ export class ParticleWizardRuntime {
     this.handUiState = this.handController.getUiState();
   }
 
+  private resolveHandControlProfile(): HandControlProfile {
+    const transitioning = this.morphProgress < 0.999;
+    const handsModeActive = transitioning
+      ? this.currentMode === PARTICLE_HANDS_MODE_INDEX || this.targetMode === PARTICLE_HANDS_MODE_INDEX
+      : this.targetMode === PARTICLE_HANDS_MODE_INDEX;
+    return handsModeActive ? "instant_dual" : "calibrated";
+  }
+
+  private syncHandControlProfile(): void {
+    this.handController.setControlProfile(this.resolveHandControlProfile());
+  }
+
   async start(): Promise<void> {
     if (this.running) {
       return;
@@ -362,6 +378,7 @@ export class ParticleWizardRuntime {
     this.fpsSampleStart = performance.now();
     this.lastRenderTime = 0;
     this.applyPerformancePreset();
+    this.syncHandControlProfile();
     void this.handController.init();
     this.frameRequestId = window.requestAnimationFrame(this.tick);
   }
@@ -390,6 +407,7 @@ export class ParticleWizardRuntime {
     this.leftParticleUniforms.targetMode.value = this.targetMode;
     this.rightParticleUniforms.currentMode.value = this.currentMode;
     this.rightParticleUniforms.targetMode.value = this.targetMode;
+    this.syncHandControlProfile();
     this.emitHud(true);
   }
 
@@ -408,6 +426,7 @@ export class ParticleWizardRuntime {
     this.leftParticleUniforms.targetMode.value = this.targetMode;
     this.rightParticleUniforms.currentMode.value = this.currentMode;
     this.rightParticleUniforms.targetMode.value = this.targetMode;
+    this.syncHandControlProfile();
     this.emitHud(true);
   }
 
@@ -1036,8 +1055,8 @@ export class ParticleWizardRuntime {
             float curlEase = sqrt(curl);
             float fingerYaw = fingerIndex < 0.5 ? -0.74 : 0.0;
             float phalanxPitchBase = (fingerIndex < 0.5) ? 0.42 : 0.55;
-            float phalanxPitchMid = phalanxPitchBase + curlEase * 0.8;
-            float phalanxPitchTip = phalanxPitchBase + 1.02 + curlEase * 1.18;
+            float phalanxPitchMid = phalanxPitchBase + curlEase * 1.05;
+            float phalanxPitchTip = phalanxPitchBase + 1.08 + curlEase * 1.45;
 
             vec3 bone1 = vec3(
               cos(fingerYaw) * cos(phalanxPitchBase),
@@ -1106,7 +1125,8 @@ export class ParticleWizardRuntime {
         vAlphaGain = mix(1.0, 0.22 + 0.78 * presence, handsModeMix);
 
         pos.x *= mix(1.0, -1.0, rightSide);
-        pos = rotateXYZ(pos, handRotation);
+        vec3 handsBaseRotation = vec3(${PARTICLE_HANDS_BASE_ROT_X}, ${PARTICLE_HANDS_BASE_ROT_Y}, ${PARTICLE_HANDS_BASE_ROT_Z});
+        pos = rotateXYZ(pos, handRotation + handsBaseRotation * handsModeMix);
         pos.x += mix(-modelSeparation, modelSeparation, rightSide);
 
         float normalizedFingerSignal = clamp(handFingerSignal, 0.0, 1.0);
@@ -1325,6 +1345,7 @@ export class ParticleWizardRuntime {
     this.leftParticleUniforms.time.value = this.globalTime;
     this.rightParticleUniforms.time.value = this.globalTime;
 
+    this.syncHandControlProfile();
     this.handController.update(dt, this.globalTime);
     this.handUiState = this.handController.getUiState();
     const leftHandOffset = this.handController.getLeftOffset();

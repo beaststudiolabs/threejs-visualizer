@@ -571,6 +571,65 @@ describe("HandWizardController calibration overlay telemetry", () => {
     expect(state.debug.mappedFingerCurlsRight).toBeDefined();
   });
 
+  it("activates dual mode immediately in instant_dual profile without calibration hold", () => {
+    const controller = new HandWizardController({ testMode: false, trackerMode: "default", video: document.createElement("video") });
+    controller.setControlProfile("instant_dual");
+
+    pushResults(controller, createDualResults(LEFT_TARGET_RAW_X, 0.5, RIGHT_TARGET_RAW_X, 0.5));
+
+    const state = controller.getUiState();
+    expect(state.handMode).toBe("dual");
+    expect(state.handTrackingState).toBe("active");
+    expect(state.wizardActive).toBe(true);
+    expect(state.debug.dualStickyActive).toBe(false);
+  });
+
+  it("returns to none in instant_dual profile when one hand is missing", () => {
+    const controller = new HandWizardController({ testMode: false, trackerMode: "default", video: document.createElement("video") });
+    controller.setControlProfile("instant_dual");
+
+    pushResults(controller, createDualResults(LEFT_TARGET_RAW_X, 0.5, RIGHT_TARGET_RAW_X, 0.5));
+    pushResults(controller, createSingleResults(0.52, 0.47));
+
+    const state = controller.getUiState();
+    expect(state.handMode).toBe("none");
+    expect(state.handTrackingState).toBe("ready");
+    expect(state.wizardActive).toBe(false);
+  });
+
+  it("updates finger curls in instant_dual profile without calibration", () => {
+    const controller = new HandWizardController({ testMode: false, trackerMode: "default", video: document.createElement("video") });
+    controller.setControlProfile("instant_dual");
+
+    for (let i = 0; i < 8; i += 1) {
+      pushResults(
+        controller,
+        createDualGestureResults(LEFT_TARGET_RAW_X, 0.5, RIGHT_TARGET_RAW_X, 0.5, {
+          leftPose: "open",
+          rightPose: "fist"
+        })
+      );
+    }
+
+    const state = controller.getUiState();
+    expect(state.handMode).toBe("dual");
+    expect(state.debug.mappedFingerCurlsRight.index).toBeGreaterThan(state.debug.mappedFingerCurlsLeft.index + 0.1);
+  });
+
+  it("keeps dualStickyActive false in stable instant_dual tracking", () => {
+    const controller = new HandWizardController({ testMode: false, trackerMode: "default", video: document.createElement("video") });
+    controller.setControlProfile("instant_dual");
+
+    for (let i = 0; i < 12; i += 1) {
+      pushResults(controller, createDualResults(LEFT_TARGET_RAW_X, 0.5, RIGHT_TARGET_RAW_X, 0.5));
+    }
+
+    const state = controller.getUiState();
+    expect(state.handMode).toBe("dual");
+    expect(state.debug.dualStickyActive).toBe(false);
+    expect(state.debug.stickyMissingRole).toBeUndefined();
+  });
+
   it("keeps single-hand particle mapping bounded during abrupt pose jumps", () => {
     const controller = new HandWizardController({ testMode: false, trackerMode: "default", video: document.createElement("video") });
 

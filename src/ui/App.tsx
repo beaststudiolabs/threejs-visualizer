@@ -806,7 +806,7 @@ export const App = (): JSX.Element => {
               Shared: {hud.handDebug.sharedRatio?.toFixed(2) ?? "0"} | Budget: {hud.handDebug.sharedBudget ?? 0}
             </div>
             <div className="debug-line">
-              Dual sticky: {String(hud.handDebug.dualStickyActive)} | missing {hud.handDebug.stickyMissingRole ?? "none"}
+              Dual sticky fallback: {String(hud.handDebug.dualStickyActive)} | missing {hud.handDebug.stickyMissingRole ?? "none"}
             </div>
             <div className="debug-line">Single role: {hud.handDebug.singleRole ?? "none"}</div>
             <div className="debug-line">
