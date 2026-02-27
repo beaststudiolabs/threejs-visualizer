@@ -1,22 +1,71 @@
-import * as THREE from "three";
+﻿import * as THREE from "three";
 import { AfterimagePass } from "three/examples/jsm/postprocessing/AfterimagePass.js";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import { mulberry32 } from "../utils/rng";
-import { HandWizardController, type HandWizardUiState } from "./HandWizardController";
+import {
+  HandWizardController,
+  type HandDebugInfo,
+  type HandMode,
+  type HandTrackingState,
+  type HandWizardUiState
+} from "./HandWizardController";
 import { clamp } from "./math";
 import { MicAnalyzer, type MicStatus } from "./MicAnalyzer";
 
 const PARTICLE_COUNT = 20_000;
 const MODE_NAMES = ["SPHERICAL", "MOBIUS", "TOROIDAL", "LISSAJOUS", "FRACTAL"] as const;
 
+export type VisualTuning = {
+  bloomStrength: number;
+  bloomRadius: number;
+  bloomThreshold: number;
+  particleGain: number;
+};
+
+export type PaletteConfig = {
+  primary: string;
+  secondary: string;
+  accent: string;
+  presetId?: string;
+};
+
+export const DEFAULT_VISUAL_TUNING: VisualTuning = {
+  bloomStrength: 0.55,
+  bloomRadius: 0.35,
+  bloomThreshold: 0.18,
+  particleGain: 0.95
+};
+
+export const DEFAULT_PALETTE: PaletteConfig = {
+  primary: "#6ee7ff",
+  secondary: "#4fb5ff",
+  accent: "#9e78ff",
+  presetId: "neon-cyan"
+};
+
+const DEFAULT_HAND_DEBUG: HandDebugInfo = {
+  palmCount: 0,
+  palms: [],
+  centerX: 0.5,
+  centerY: 0.5,
+  inCenter: false,
+  calibrationTimerMs: 0,
+  mappedOffset: { x: 0, y: 0, z: 0 },
+  mappedScale: 0,
+  staleMs: 0
+};
+
 const DEFAULT_HAND_UI_STATE: HandWizardUiState = {
   webcamVisible: true,
   overlayOpacity: 0.35,
   wizardActive: false,
   statusText: "Align both palms in center to calibrate wizard.",
-  statusColor: "#00ffff"
+  statusColor: "#00ffff",
+  handMode: "none",
+  handTrackingState: "loading",
+  debug: DEFAULT_HAND_DEBUG
 };
 
 export type WizardHudState = {
@@ -35,6 +84,11 @@ export type WizardHudState = {
   micButtonText: string;
   micButtonColor: string;
   micStatus: MicStatus;
+  handMode: HandMode;
+  handTrackingState: HandTrackingState;
+  handDebug: HandDebugInfo;
+  visualTuning: VisualTuning;
+  palette: PaletteConfig;
 };
 
 type ParticleUniforms = {
@@ -45,6 +99,10 @@ type ParticleUniforms = {
   handOffset: { value: THREE.Vector3 };
   handScale: { value: number };
   bassPump: { value: number };
+  colorPrimary: { value: THREE.Vector3 };
+  colorSecondary: { value: THREE.Vector3 };
+  colorAccent: { value: THREE.Vector3 };
+  particleGain: { value: number };
 };
 
 export type ParticleWizardRuntimeConfig = {
@@ -64,6 +122,11 @@ type StatusOverride = {
   until: number;
 };
 
+const toColorVector = (hex: string): THREE.Vector3 => {
+  const color = new THREE.Color(hex);
+  return new THREE.Vector3(color.r, color.g, color.b);
+};
+
 export const createInitialHudState = (): WizardHudState => ({
   particleCount: PARTICLE_COUNT,
   fps: 60,
@@ -79,7 +142,12 @@ export const createInitialHudState = (): WizardHudState => ({
   calibrationOpacity: 0.35,
   micButtonText: "MIC ON",
   micButtonColor: "#00ffff",
-  micStatus: "idle"
+  micStatus: "idle",
+  handMode: "none",
+  handTrackingState: "loading",
+  handDebug: { ...DEFAULT_HAND_DEBUG },
+  visualTuning: { ...DEFAULT_VISUAL_TUNING },
+  palette: { ...DEFAULT_PALETTE }
 });
 
 export class ParticleWizardRuntime {
@@ -104,6 +172,8 @@ export class ParticleWizardRuntime {
   private running = false;
   private initialized = false;
   private handUiState: HandWizardUiState = DEFAULT_HAND_UI_STATE;
+  private visualTuning: VisualTuning = { ...DEFAULT_VISUAL_TUNING };
+  private palette: PaletteConfig = { ...DEFAULT_PALETTE };
 
   private clock = new THREE.Clock();
   private globalTime = 0;
@@ -196,6 +266,49 @@ export class ParticleWizardRuntime {
     this.emitHud(true);
   }
 
+  setVisualTuning(next: Partial<VisualTuning>): void {
+    this.visualTuning = {
+      bloomStrength: clamp(next.bloomStrength ?? this.visualTuning.bloomStrength, 0, 1.5),
+      bloomRadius: clamp(next.bloomRadius ?? this.visualTuning.bloomRadius, 0, 1),
+      bloomThreshold: clamp(next.bloomThreshold ?? this.visualTuning.bloomThreshold, 0, 1),
+      particleGain: clamp(next.particleGain ?? this.visualTuning.particleGain, 0.4, 1.4)
+    };
+
+    if (this.bloomPass) {
+      this.bloomPass.strength = this.visualTuning.bloomStrength;
+      this.bloomPass.radius = this.visualTuning.bloomRadius;
+      this.bloomPass.threshold = this.visualTuning.bloomThreshold;
+    }
+
+    if (this.uniforms) {
+      this.uniforms.particleGain.value = this.visualTuning.particleGain;
+    }
+
+    this.emitHud(true);
+  }
+
+  setPalette(next: PaletteConfig): void {
+    this.palette = {
+      primary: next.primary,
+      secondary: next.secondary,
+      accent: next.accent,
+      presetId: next.presetId
+    };
+
+    if (this.uniforms) {
+      this.uniforms.colorPrimary.value.copy(toColorVector(this.palette.primary));
+      this.uniforms.colorSecondary.value.copy(toColorVector(this.palette.secondary));
+      this.uniforms.colorAccent.value.copy(toColorVector(this.palette.accent));
+    }
+
+    this.emitHud(true);
+  }
+
+  resetHandCalibration(): void {
+    this.handController.resetCalibration();
+    this.emitHud(true);
+  }
+
   async requestMic(): Promise<MicStatus> {
     const status = await this.mic.start();
 
@@ -283,7 +396,7 @@ export class ParticleWizardRuntime {
     const renderPass = new RenderPass(scene, camera);
     composer.addPass(renderPass);
 
-    const bloomPass = new UnrealBloomPass(new THREE.Vector2(1, 1), 1.75, 0.9, 0.07);
+    const bloomPass = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.55, 0.35, 0.18);
     composer.addPass(bloomPass);
 
     const afterimagePass = new AfterimagePass(0.87);
@@ -300,6 +413,9 @@ export class ParticleWizardRuntime {
     this.buildParticles();
     this.buildStars();
     this.attachPointerControls();
+
+    this.setVisualTuning(this.visualTuning);
+    this.setPalette(this.palette);
 
     const initialWidth = this.config.width ?? this.config.canvas.clientWidth ?? window.innerWidth;
     const initialHeight = this.config.height ?? this.config.canvas.clientHeight ?? window.innerHeight;
@@ -353,6 +469,10 @@ export class ParticleWizardRuntime {
       uniform vec3 handOffset;
       uniform float handScale;
       uniform float bassPump;
+      uniform vec3 colorPrimary;
+      uniform vec3 colorSecondary;
+      uniform vec3 colorAccent;
+      uniform float particleGain;
       varying vec3 vColor;
 
       vec3 getPos(int mode, float t, float a, float b) {
@@ -404,14 +524,19 @@ export class ParticleWizardRuntime {
       }
 
       void main() {
-        vColor = color * 1.7;
+        vec3 paletteAB = mix(colorPrimary, colorSecondary, clamp(p1, 0.0, 1.0));
+        float accentWeight = smoothstep(0.35, 1.0, clamp(p2, 0.0, 1.0)) * 0.75;
+        vec3 paletteColor = mix(paletteAB, colorAccent, accentWeight);
+        vColor = paletteColor * (0.75 + color.r * 0.5) * particleGain;
+
         vec3 base = getPos(currentMode, time, p1, p2);
         vec3 next = getPos(targetMode, time, p1, p2);
         vec3 pos = mix(base, next, morph);
         pos = pos * (1.0 + handScale * 0.45) + handOffset * 3.5;
         pos += normalize(pos) * bassPump * 1.8;
         vec4 mvPos = modelViewMatrix * vec4(pos, 1.0);
-        gl_PointSize = 4.2 * (420.0 / -mvPos.z) * (1.0 + bassPump * 2.5 + 0.4 * sin(time * 6.0 + p1 * 30.0));
+        float sizeRaw = 4.2 * (420.0 / -mvPos.z) * (1.0 + bassPump * 2.5 + 0.4 * sin(time * 6.0 + p1 * 30.0));
+        gl_PointSize = clamp(sizeRaw, 1.2, 9.5);
         gl_Position = projectionMatrix * mvPos;
       }
     `;
@@ -437,7 +562,11 @@ export class ParticleWizardRuntime {
       morph: { value: 1 },
       handOffset: { value: new THREE.Vector3(0, 0, 0) },
       handScale: { value: 0 },
-      bassPump: { value: 0 }
+      bassPump: { value: 0 },
+      colorPrimary: { value: toColorVector(this.palette.primary) },
+      colorSecondary: { value: toColorVector(this.palette.secondary) },
+      colorAccent: { value: toColorVector(this.palette.accent) },
+      particleGain: { value: this.visualTuning.particleGain }
     };
 
     const material = new THREE.ShaderMaterial({
@@ -630,7 +759,12 @@ export class ParticleWizardRuntime {
       calibrationOpacity: this.handUiState.overlayOpacity,
       micButtonText: micStatus === "denied" ? "MIC DENIED" : "MIC ON",
       micButtonColor: micStatus === "active" ? "#0f8" : "#00ffff",
-      micStatus
+      micStatus,
+      handMode: this.handUiState.handMode,
+      handTrackingState: this.handUiState.handTrackingState,
+      handDebug: this.handUiState.debug,
+      visualTuning: { ...this.visualTuning },
+      palette: { ...this.palette }
     });
   }
 }

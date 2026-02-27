@@ -4,12 +4,39 @@ export type Vec3 = {
   z: number;
 };
 
+export type Rgb = {
+  r: number;
+  g: number;
+  b: number;
+};
+
+export type PalmCandidate = Vec3 & {
+  label?: string;
+};
+
+export type PalmAssignment =
+  | {
+      mode: "none";
+      source: "none";
+    }
+  | {
+      mode: "single";
+      source: "single";
+      single: Vec3;
+    }
+  | {
+      mode: "dual";
+      source: "labels" | "sorted";
+      left: Vec3;
+      right: Vec3;
+    };
+
 export const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
 
 export const clamp01 = (value: number): number => clamp(value, 0, 1);
 
-export const isCalibrationCenter = (centerX: number, centerY: number): boolean =>
-  centerX > 0.42 && centerX < 0.58 && centerY > 0.42 && centerY < 0.58;
+export const isCalibrationCenter = (centerX: number, centerY: number, min = 0.38, max = 0.62): boolean =>
+  centerX > min && centerX < max && centerY > min && centerY < max;
 
 export const updateCalibrationTimer = (currentMs: number, inCenter: boolean, stepMs = 16): number =>
   inCenter ? currentMs + stepMs : 0;
@@ -25,6 +52,17 @@ export const mapHandPose = (leftPalm: Vec3, rightPalm: Vec3, neutralLeft: Vec3, 
 
   const spread = Math.hypot(leftPalm.x - rightPalm.x, leftPalm.y - rightPalm.y) * 18;
 
+  return { offset, spread };
+};
+
+export const mapSingleHandPose = (palm: Vec3, neutral: Vec3): { offset: Vec3; spread: number } => {
+  const offset = {
+    x: (palm.x - neutral.x) * 22,
+    y: (palm.y - neutral.y) * -18,
+    z: (palm.z - neutral.z) * 12
+  };
+  const motionMagnitude = Math.hypot(offset.x, offset.y, offset.z);
+  const spread = clamp(motionMagnitude * 0.35, 0, 3.5);
   return { offset, spread };
 };
 
@@ -49,6 +87,64 @@ export const smoothHandState = (
 export const smoothBass = (previous: number, raw: number): number => {
   const normalizedRaw = clamp01(raw);
   return clamp01(previous * 0.88 + normalizedRaw * 0.12);
+};
+
+export const resolvePalmAssignment = (candidates: PalmCandidate[]): PalmAssignment => {
+  if (candidates.length === 0) {
+    return { mode: "none", source: "none" };
+  }
+
+  if (candidates.length === 1) {
+    const palm = candidates[0];
+    return {
+      mode: "single",
+      source: "single",
+      single: { x: palm.x, y: palm.y, z: palm.z }
+    };
+  }
+
+  const leftLabeled = candidates.find((candidate) => candidate.label?.toLowerCase() === "left");
+  const rightLabeled = candidates.find((candidate) => candidate.label?.toLowerCase() === "right");
+
+  if (leftLabeled && rightLabeled) {
+    return {
+      mode: "dual",
+      source: "labels",
+      left: { x: leftLabeled.x, y: leftLabeled.y, z: leftLabeled.z },
+      right: { x: rightLabeled.x, y: rightLabeled.y, z: rightLabeled.z }
+    };
+  }
+
+  const sorted = [...candidates].sort((a, b) => a.x - b.x);
+  return {
+    mode: "dual",
+    source: "sorted",
+    left: { x: sorted[0].x, y: sorted[0].y, z: sorted[0].z },
+    right: { x: sorted[sorted.length - 1].x, y: sorted[sorted.length - 1].y, z: sorted[sorted.length - 1].z }
+  };
+};
+
+export const blendPaletteColor = (
+  primary: Rgb,
+  secondary: Rgb,
+  accent: Rgb,
+  p1: number,
+  p2: number,
+  base = 1
+): Rgb => {
+  const t1 = clamp01(p1);
+  const t2 = clamp01(p2);
+  const mixAB = {
+    r: primary.r + (secondary.r - primary.r) * t1,
+    g: primary.g + (secondary.g - primary.g) * t1,
+    b: primary.b + (secondary.b - primary.b) * t1
+  };
+  const accentWeight = clamp01((t2 - 0.35) / 0.65) * 0.75;
+  return {
+    r: clamp01((mixAB.r + (accent.r - mixAB.r) * accentWeight) * base),
+    g: clamp01((mixAB.g + (accent.g - mixAB.g) * accentWeight) * base),
+    b: clamp01((mixAB.b + (accent.b - mixAB.b) * accentWeight) * base)
+  };
 };
 
 export const computeModePosition = (mode: number, t: number, a: number, b: number): Vec3 => {
