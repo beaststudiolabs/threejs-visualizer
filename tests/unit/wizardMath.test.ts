@@ -11,8 +11,10 @@ import {
   mapLeftHandPose,
   mapRightHandPose,
   mapHandPose,
+  mapHandRotationPose,
   mirrorWebcamX,
   shouldActivateCalibration,
+  smoothHandRotation,
   smoothBass,
   smoothHandState,
   updateCalibrationTimer
@@ -63,6 +65,67 @@ const createGestureLandmarks = (
   setFingerChain(13, 14, 15, 16, ringMcpX, palmY - 0.015);
   setFingerChain(17, 18, 19, 20, pinkyMcpX, palmY - 0.02);
 
+  return landmarks;
+};
+
+const rotateX = (point: { x: number; y: number; z: number }, angle: number): { x: number; y: number; z: number } => {
+  const c = Math.cos(angle);
+  const s = Math.sin(angle);
+  return {
+    x: point.x,
+    y: point.y * c - point.z * s,
+    z: point.y * s + point.z * c
+  };
+};
+
+const rotateY = (point: { x: number; y: number; z: number }, angle: number): { x: number; y: number; z: number } => {
+  const c = Math.cos(angle);
+  const s = Math.sin(angle);
+  return {
+    x: point.x * c + point.z * s,
+    y: point.y,
+    z: -point.x * s + point.z * c
+  };
+};
+
+const rotateZ = (point: { x: number; y: number; z: number }, angle: number): { x: number; y: number; z: number } => {
+  const c = Math.cos(angle);
+  const s = Math.sin(angle);
+  return {
+    x: point.x * c - point.y * s,
+    y: point.x * s + point.y * c,
+    z: point.z
+  };
+};
+
+const createRotationLandmarks = (
+  rotation: { x: number; y: number; z: number },
+  role: "left" | "right" = "left"
+): Array<{ x: number; y: number; z: number }> => {
+  const landmarks = Array.from({ length: 21 }, () => ({ x: 0.5, y: 0.5, z: 0 }));
+  const center = { x: 0.5, y: 0.5, z: 0 };
+  const roleSign = role === "left" ? 1 : -1;
+
+  const transform = (local: { x: number; y: number; z: number }): { x: number; y: number; z: number } => {
+    let rotated = rotateX(local, rotation.x);
+    rotated = rotateY(rotated, rotation.y * roleSign);
+    rotated = rotateZ(rotated, rotation.z * roleSign);
+    return {
+      x: center.x + rotated.x,
+      y: center.y + rotated.y,
+      z: center.z + rotated.z
+    };
+  };
+
+  const wrist = transform({ x: 0, y: -0.12, z: 0 });
+  const middleMcp = transform({ x: 0, y: 0.02, z: 0 });
+  const indexMcp = transform({ x: 0.08, y: 0.02, z: 0 });
+  const pinkyMcp = transform({ x: -0.08, y: 0.02, z: 0 });
+
+  landmarks[0] = wrist;
+  landmarks[5] = indexMcp;
+  landmarks[9] = middleMcp;
+  landmarks[17] = pinkyMcp;
   return landmarks;
 };
 
@@ -126,6 +189,41 @@ describe("wizard math helpers", () => {
     expect(isBackOfHandFacingCamera(rightSelf, "right")).toBe(true);
     expect(isBackOfHandFacingCamera(rightCamera, "right")).toBe(false);
     expect(isBackOfHandFacingCamera(undefined, "left")).toBe(false);
+  });
+
+  it("maps neutral-relative hand rotations per axis", () => {
+    const neutralLeft = createRotationLandmarks({ x: 0, y: 0, z: 0 }, "left");
+    const rotatedLeft = createRotationLandmarks({ x: 0.32, y: 0.24, z: -0.27 }, "left");
+    const leftDelta = mapHandRotationPose(rotatedLeft, neutralLeft, "left");
+
+    expect(leftDelta.x).toBeGreaterThan(0.2);
+    expect(leftDelta.y).toBeGreaterThan(0.13);
+    expect(leftDelta.z).toBeLessThan(-0.15);
+
+    const neutralRight = createRotationLandmarks({ x: 0, y: 0, z: 0 }, "right");
+    const rotatedRight = createRotationLandmarks({ x: 0.25, y: -0.21, z: 0.3 }, "right");
+    const rightDelta = mapHandRotationPose(rotatedRight, neutralRight, "right");
+
+    expect(rightDelta.x).toBeGreaterThan(0.15);
+    expect(rightDelta.y).toBeLessThan(-0.12);
+    expect(rightDelta.z).toBeGreaterThan(0.12);
+  });
+
+  it("returns zero rotation for missing landmarks", () => {
+    expect(mapHandRotationPose(undefined, undefined, "left")).toEqual({ x: 0, y: 0, z: 0 });
+    expect(mapHandRotationPose(createRotationLandmarks({ x: 0, y: 0, z: 0 }), undefined, "right")).toEqual({ x: 0, y: 0, z: 0 });
+  });
+
+  it("smooths hand rotations with shortest-angle interpolation", () => {
+    const smoothed = smoothHandRotation(
+      { x: Math.PI - 0.1, y: -Math.PI + 0.08, z: Math.PI - 0.05 },
+      { x: -Math.PI + 0.1, y: Math.PI - 0.08, z: -Math.PI + 0.05 },
+      0.5
+    );
+
+    expect(Math.abs(smoothed.x)).toBeGreaterThan(2.5);
+    expect(Math.abs(smoothed.y)).toBeGreaterThan(2.5);
+    expect(Math.abs(smoothed.z)).toBeGreaterThan(2.5);
   });
 
   it("maps and smooths hand offsets", () => {

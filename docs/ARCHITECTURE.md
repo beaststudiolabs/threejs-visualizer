@@ -10,8 +10,10 @@
   - Background clear color + starfield visibility state
   - Optional microphone bass analysis with toggle + sensitivity
   - MediaPipe Tasks hand tracking with calibration and pose mapping
+  - Per-hand neutral-relative rotation mapping (`x/y/z`) from webcam landmarks to particle side transforms
   - Per-finger hand curl mapping for the `PARTICLE HANDS` mode (thumb/index/middle/ring/pinky)
   - Hand-presence smoothing for single-hand ghost fade behavior in `PARTICLE HANDS`
+  - Sticky dual-hand continuity (`250ms`) to preserve simultaneous two-side control during brief tracker flicker
   - Single active runtime path only (legacy dock/template stack removed)
 
 ## Runtime Layers

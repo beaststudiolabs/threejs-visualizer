@@ -86,6 +86,41 @@ const createDualGestureResults = (
 const createDualResults = (leftRawX: number, leftY: number, rightRawX: number, rightY: number): LegacyHandsResults =>
   createDualGestureResults(leftRawX, leftY, rightRawX, rightY);
 
+const rotateLandmarksZ = (
+  landmarks: LegacyLandmark[],
+  angle: number,
+  centerX: number,
+  centerY: number
+): LegacyLandmark[] => {
+  const c = Math.cos(angle);
+  const s = Math.sin(angle);
+  return landmarks.map((landmark) => {
+    const dx = landmark.x - centerX;
+    const dy = landmark.y - centerY;
+    return {
+      x: centerX + dx * c - dy * s,
+      y: centerY + dx * s + dy * c,
+      z: landmark.z
+    };
+  });
+};
+
+const createDualRolledResults = (
+  leftRawX: number,
+  leftY: number,
+  rightRawX: number,
+  rightY: number,
+  leftRoll: number,
+  rightRoll: number
+): LegacyHandsResults => {
+  const left = rotateLandmarksZ(createCalibrationLandmarks(leftRawX, leftY, "left", "fist", "self"), leftRoll, leftRawX, leftY);
+  const right = rotateLandmarksZ(createCalibrationLandmarks(rightRawX, rightY, "right", "fist", "self"), rightRoll, rightRawX, rightY);
+  return {
+    multiHandLandmarks: [left, right],
+    multiHandedness: [{ label: "Left" }, { label: "Right" }]
+  };
+};
+
 const createSingleResults = (rawX: number, y: number): LegacyHandsResults => ({
   multiHandLandmarks: [createPalmLandmarks(rawX, y)],
   multiHandedness: [{ label: "Left" }]
@@ -538,16 +573,20 @@ describe("HandWizardController calibration overlay telemetry", () => {
       pushResults(controller, createDualResults(LEFT_TARGET_RAW_X, 0.5, RIGHT_TARGET_RAW_X, 0.5));
     }
 
-    pushResults(controller, createDualResults(0.68, 0.5, 0.32, 0.5));
+    pushResults(controller, createDualRolledResults(0.68, 0.5, 0.32, 0.5, 0.28, -0.24));
     const leftOffset = controller.getLeftOffset();
     const rightOffset = controller.getRightOffset();
     const leftScale = controller.getLeftScale();
     const rightScale = controller.getRightScale();
+    const leftRotation = controller.getLeftRotation();
+    const rightRotation = controller.getRightRotation();
 
     expect(leftOffset.x).toBeGreaterThan(0);
     expect(rightOffset.x).toBeLessThan(0);
     expect(leftScale).toBeGreaterThan(0);
     expect(rightScale).toBeGreaterThan(0);
+    expect(Math.abs(leftRotation.z)).toBeGreaterThan(0.01);
+    expect(Math.abs(rightRotation.z)).toBeGreaterThan(0.01);
 
     const debug = controller.getUiState().debug;
     expect(debug.mappedOffsetLeft.x).toBeGreaterThan(0);
@@ -556,7 +595,79 @@ describe("HandWizardController calibration overlay telemetry", () => {
     expect(debug.mappedScaleRight).toBeGreaterThan(0);
     expect(debug.mappedFingerCurlsLeft).toBeDefined();
     expect(debug.mappedFingerCurlsRight).toBeDefined();
+    expect(Math.abs(debug.mappedRotationLeft.z)).toBeGreaterThan(0.01);
+    expect(Math.abs(debug.mappedRotationRight.z)).toBeGreaterThan(0.01);
     expect(debug.singleRole).toBeUndefined();
+  });
+
+  it("keeps dual mode active for brief single-hand dropouts", () => {
+    const controller = new HandWizardController({ testMode: false, trackerMode: "default", video: document.createElement("video") });
+    const dateNowSpy = vi.spyOn(Date, "now");
+    let now = 10_000;
+    dateNowSpy.mockImplementation(() => now);
+
+    for (let i = 0; i < 76; i += 1) {
+      now += 16;
+      pushResults(controller, createDualResults(LEFT_TARGET_RAW_X, 0.5, RIGHT_TARGET_RAW_X, 0.5));
+    }
+
+    now += 16;
+    pushResults(controller, createDualRolledResults(0.7, 0.5, 0.3, 0.5, 0.24, -0.2));
+    const beforeSingle = controller.getRightOffset();
+    now += 120;
+    pushResults(controller, createSingleResultsWithLabel(0.7, 0.5, "Left"));
+
+    const state = controller.getUiState();
+    expect(state.handMode).toBe("dual");
+    expect(state.handTrackingState).toBe("active");
+    expect(state.debug.dualStickyActive).toBe(true);
+    expect(state.debug.stickyMissingRole).toBe("right");
+    expect(Math.abs(controller.getRightOffset().x)).toBeGreaterThan(0.2);
+    expect(controller.getRightOffset().x).toBeLessThan(0);
+  });
+
+  it("exits sticky dual mode once grace window expires", () => {
+    const controller = new HandWizardController({ testMode: false, trackerMode: "default", video: document.createElement("video") });
+    const dateNowSpy = vi.spyOn(Date, "now");
+    let now = 20_000;
+    dateNowSpy.mockImplementation(() => now);
+
+    for (let i = 0; i < 76; i += 1) {
+      now += 16;
+      pushResults(controller, createDualResults(LEFT_TARGET_RAW_X, 0.5, RIGHT_TARGET_RAW_X, 0.5));
+    }
+
+    now += 16;
+    pushResults(controller, createDualResults(0.7, 0.5, 0.3, 0.5));
+    now += 320;
+    pushResults(controller, createSingleResultsWithLabel(0.7, 0.5, "Left"));
+
+    const state = controller.getUiState();
+    expect(state.handMode).not.toBe("dual");
+    expect(state.debug.dualStickyActive).toBe(false);
+  });
+
+  it("does not advance recalibration hold timer during sticky dual frames", () => {
+    const controller = new HandWizardController({ testMode: false, trackerMode: "default", video: document.createElement("video") });
+    const dateNowSpy = vi.spyOn(Date, "now");
+    let now = 30_000;
+    dateNowSpy.mockImplementation(() => now);
+
+    for (let i = 0; i < 76; i += 1) {
+      now += 16;
+      pushResults(controller, createDualResults(LEFT_TARGET_RAW_X, 0.5, RIGHT_TARGET_RAW_X, 0.5));
+    }
+
+    now += 16;
+    pushResults(controller, createDualResults(LEFT_TARGET_RAW_X, 0.5, RIGHT_TARGET_RAW_X, 0.5));
+    const timerBeforeSticky = controller.getUiState().debug.calibrationTimerMs;
+    expect(timerBeforeSticky).toBeGreaterThan(0);
+
+    now += 80;
+    pushResults(controller, createSingleResultsWithLabel(LEFT_TARGET_RAW_X, 0.5, "Left"));
+    const state = controller.getUiState();
+    expect(state.debug.dualStickyActive).toBe(true);
+    expect(state.debug.calibrationTimerMs).toBeLessThanOrEqual(timerBeforeSticky);
   });
 
   it("prefers handedness label, with mirrored-x fallback for single-role mapping", () => {

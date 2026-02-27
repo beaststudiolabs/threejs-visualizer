@@ -57,6 +57,8 @@ The active root experience is the Particle Wizard HUD (not the legacy dock layou
 
 - `PARTICLE HANDS` is the 11th transform mode and participates in normal `TRANSFORM` cycling.
 - Left/right hand movement controls corresponding particle-hand movement in `x/y/z`.
+- Left/right hand orientation controls corresponding particle-hand rotation in `x/y/z` (neutral-relative to dual calibration pose).
+- Dual-hand mode updates both sides simultaneously; brief one-side dropouts use a `250ms` sticky dual grace window to avoid snapping.
 - Finger articulation is per-finger (thumb/index/middle/ring/pinky) from live landmarks.
 - In single-hand tracking, the tracked side stays active while the untracked side fades to a neutral ghost.
 - During degraded tracking, hand presence fades smoothly instead of snapping.

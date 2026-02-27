@@ -4,6 +4,7 @@ import {
   evaluateDualPalmTargets,
   isBackOfHandFacingCamera,
   isCalibrationFist,
+  mapHandRotationPose,
   mirrorWebcamX,
   mapLeftHandPose,
   mapRightHandPose,
@@ -11,9 +12,12 @@ import {
   resolvePalmAssignment,
   shouldActivateCalibration,
   smoothFingerCurls,
+  smoothHandRotation,
   smoothHandState,
   updateCalibrationTimer,
   type FingerCurls,
+  type HandRotation,
+  type PalmPose,
   type PalmCandidate,
   type Vec3
 } from "./math";
@@ -62,6 +66,11 @@ export type HandDebugInfo = {
   mappedFingerRight: number;
   mappedFingerCurlsLeft: FingerCurls;
   mappedFingerCurlsRight: FingerCurls;
+  mappedRotation: HandRotation;
+  mappedRotationLeft: HandRotation;
+  mappedRotationRight: HandRotation;
+  dualStickyActive: boolean;
+  stickyMissingRole?: "left" | "right";
   singleRole?: "left" | "right";
   sharedRatio?: number;
   sharedBudget?: number;
@@ -91,6 +100,7 @@ type HandWizardControllerConfig = {
 const CALIBRATION_HOLD_MS = 1200;
 const RECALIBRATION_HOLD_MS = 1500;
 const SINGLE_FALLBACK_HOLD_MS = 500;
+const DUAL_STICKY_GRACE_MS = 250;
 const OVERLAY_READY_OPACITY = 0.35;
 const OVERLAY_HOLD_OPACITY = 0.85;
 const OVERLAY_ACTIVE_FAINT_OPACITY = 0.22;
@@ -130,6 +140,11 @@ const DEFAULT_DEBUG_INFO: HandDebugInfo = {
   mappedFingerRight: 0,
   mappedFingerCurlsLeft: createZeroFingerCurls(),
   mappedFingerCurlsRight: createZeroFingerCurls(),
+  mappedRotation: { x: 0, y: 0, z: 0 },
+  mappedRotationLeft: { x: 0, y: 0, z: 0 },
+  mappedRotationRight: { x: 0, y: 0, z: 0 },
+  dualStickyActive: false,
+  stickyMissingRole: undefined,
   staleMs: 0
 };
 
@@ -153,19 +168,25 @@ export class HandWizardController {
   private singleStableMs = 0;
   private lastHandTime = 0;
 
-  private neutralLeft: Vec3 = { x: 0, y: 0, z: 0 };
-  private neutralRight: Vec3 = { x: 0, y: 0, z: 0 };
-  private neutralSingle: Vec3 = { x: 0, y: 0, z: 0 };
+  private neutralLeft: PalmPose = { x: 0, y: 0, z: 0 };
+  private neutralRight: PalmPose = { x: 0, y: 0, z: 0 };
+  private neutralSingle: PalmPose = { x: 0, y: 0, z: 0 };
   private handOffset: Vec3 = { x: 0, y: 0, z: 0 };
   private handScale = 0;
+  private handRotation: HandRotation = { x: 0, y: 0, z: 0 };
   private leftHandOffset: Vec3 = { x: 0, y: 0, z: 0 };
   private leftHandScale = 0;
+  private leftHandRotation: HandRotation = { x: 0, y: 0, z: 0 };
   private leftFingerSignal = 0;
   private leftFingerCurls: FingerCurls = createZeroFingerCurls();
   private rightHandOffset: Vec3 = { x: 0, y: 0, z: 0 };
   private rightHandScale = 0;
+  private rightHandRotation: HandRotation = { x: 0, y: 0, z: 0 };
   private rightFingerSignal = 0;
   private rightFingerCurls: FingerCurls = createZeroFingerCurls();
+  private lastDualLeftPalm?: PalmPose;
+  private lastDualRightPalm?: PalmPose;
+  private lastDualSeenAt = 0;
 
   private uiState: HandWizardUiState = {
     webcamVisible: true,
@@ -329,6 +350,17 @@ export class HandWizardController {
       this.leftHandScale = leftSmooth.scale;
       this.rightHandOffset = rightSmooth.offset;
       this.rightHandScale = rightSmooth.scale;
+      const targetRotation: HandRotation = {
+        x: Math.sin(time * 0.55) * 0.35,
+        y: Math.cos(time * 0.47) * 0.28,
+        z: Math.sin(time * 0.62) * 0.42
+      };
+      this.leftHandRotation = smoothHandRotation(this.leftHandRotation, targetRotation, 0.22);
+      this.rightHandRotation = smoothHandRotation(this.rightHandRotation, {
+        x: targetRotation.x,
+        y: -targetRotation.y,
+        z: -targetRotation.z
+      }, 0.22);
 
       this.handOffset = {
         x: (leftSmooth.offset.x + rightSmooth.offset.x) / 2,
@@ -336,6 +368,11 @@ export class HandWizardController {
         z: (leftSmooth.offset.z + rightSmooth.offset.z) / 2
       };
       this.handScale = (leftSmooth.scale + rightSmooth.scale) / 2;
+      this.handRotation = {
+        x: (this.leftHandRotation.x + this.rightHandRotation.x) / 2,
+        y: (this.leftHandRotation.y + this.rightHandRotation.y) / 2,
+        z: (this.leftHandRotation.z + this.rightHandRotation.z) / 2
+      };
       this.leftFingerSignal = 0.25 + 0.15 * Math.sin(time * 1.3);
       this.rightFingerSignal = this.leftFingerSignal;
       const syntheticCurls: FingerCurls = {
@@ -360,6 +397,11 @@ export class HandWizardController {
         mappedFingerRight: this.rightFingerSignal,
         mappedFingerCurlsLeft: this.leftFingerCurls,
         mappedFingerCurlsRight: this.rightFingerCurls,
+        mappedRotation: this.handRotation,
+        mappedRotationLeft: this.leftHandRotation,
+        mappedRotationRight: this.rightHandRotation,
+        dualStickyActive: false,
+        stickyMissingRole: undefined,
         singleRole: undefined,
         staleMs: 0
       };
@@ -376,12 +418,16 @@ export class HandWizardController {
     if (staleMs > 450) {
       const leftSmooth = smoothHandState(this.leftHandOffset, this.leftHandScale, { x: 0, y: 0, z: 0 }, 0, 0.08);
       const rightSmooth = smoothHandState(this.rightHandOffset, this.rightHandScale, { x: 0, y: 0, z: 0 }, 0, 0.08);
+      const leftRotationSmooth = smoothHandRotation(this.leftHandRotation, { x: 0, y: 0, z: 0 }, 0.08);
+      const rightRotationSmooth = smoothHandRotation(this.rightHandRotation, { x: 0, y: 0, z: 0 }, 0.08);
       const zeroCurls = createZeroFingerCurls();
 
       this.leftHandOffset = leftSmooth.offset;
       this.leftHandScale = leftSmooth.scale;
       this.rightHandOffset = rightSmooth.offset;
       this.rightHandScale = rightSmooth.scale;
+      this.leftHandRotation = leftRotationSmooth;
+      this.rightHandRotation = rightRotationSmooth;
       this.leftFingerSignal *= 0.92;
       this.rightFingerSignal *= 0.92;
       this.leftFingerCurls = smoothFingerCurls(this.leftFingerCurls, zeroCurls, 0.08);
@@ -393,16 +439,26 @@ export class HandWizardController {
         z: (leftSmooth.offset.z + rightSmooth.offset.z) / 2
       };
       this.handScale = (leftSmooth.scale + rightSmooth.scale) / 2;
+      this.handRotation = {
+        x: (leftRotationSmooth.x + rightRotationSmooth.x) / 2,
+        y: (leftRotationSmooth.y + rightRotationSmooth.y) / 2,
+        z: (leftRotationSmooth.z + rightRotationSmooth.z) / 2
+      };
       this.uiState.debug.mappedOffset = { ...this.handOffset };
       this.uiState.debug.mappedScale = this.handScale;
       this.uiState.debug.mappedOffsetLeft = { ...this.leftHandOffset };
       this.uiState.debug.mappedScaleLeft = this.leftHandScale;
       this.uiState.debug.mappedOffsetRight = { ...this.rightHandOffset };
       this.uiState.debug.mappedScaleRight = this.rightHandScale;
+      this.uiState.debug.mappedRotation = { ...this.handRotation };
+      this.uiState.debug.mappedRotationLeft = { ...this.leftHandRotation };
+      this.uiState.debug.mappedRotationRight = { ...this.rightHandRotation };
       this.uiState.debug.mappedFingerLeft = this.leftFingerSignal;
       this.uiState.debug.mappedFingerRight = this.rightFingerSignal;
       this.uiState.debug.mappedFingerCurlsLeft = this.leftFingerCurls;
       this.uiState.debug.mappedFingerCurlsRight = this.rightFingerCurls;
+      this.uiState.debug.dualStickyActive = false;
+      this.uiState.debug.stickyMissingRole = undefined;
       this.uiState.debug.singleRole = undefined;
       this.uiState.debug.inCenter = false;
       this.uiState.debug.leftTargetReady = false;
@@ -455,6 +511,10 @@ export class HandWizardController {
     return this.leftHandScale;
   }
 
+  getLeftRotation(): HandRotation {
+    return this.leftHandRotation;
+  }
+
   getLeftFingerSignal(): number {
     return this.leftFingerSignal;
   }
@@ -469,6 +529,10 @@ export class HandWizardController {
 
   getRightScale(): number {
     return this.rightHandScale;
+  }
+
+  getRightRotation(): HandRotation {
+    return this.rightHandRotation;
   }
 
   getRightFingerSignal(): number {
@@ -496,14 +560,20 @@ export class HandWizardController {
     this.singleStableMs = 0;
     this.handOffset = { x: 0, y: 0, z: 0 };
     this.handScale = 0;
+    this.handRotation = { x: 0, y: 0, z: 0 };
     this.leftHandOffset = { x: 0, y: 0, z: 0 };
     this.leftHandScale = 0;
+    this.leftHandRotation = { x: 0, y: 0, z: 0 };
     this.leftFingerSignal = 0;
     this.leftFingerCurls = createZeroFingerCurls();
     this.rightHandOffset = { x: 0, y: 0, z: 0 };
     this.rightHandScale = 0;
+    this.rightHandRotation = { x: 0, y: 0, z: 0 };
     this.rightFingerSignal = 0;
     this.rightFingerCurls = createZeroFingerCurls();
+    this.lastDualLeftPalm = undefined;
+    this.lastDualRightPalm = undefined;
+    this.lastDualSeenAt = 0;
     this.uiState.overlayOpacity = OVERLAY_READY_OPACITY;
     this.uiState.wizardActive = false;
     this.uiState.handMode = "none";
@@ -534,6 +604,11 @@ export class HandWizardController {
       mappedFingerRight: 0,
       mappedFingerCurlsLeft: createZeroFingerCurls(),
       mappedFingerCurlsRight: createZeroFingerCurls(),
+      mappedRotation: { x: 0, y: 0, z: 0 },
+      mappedRotationLeft: { x: 0, y: 0, z: 0 },
+      mappedRotationRight: { x: 0, y: 0, z: 0 },
+      dualStickyActive: false,
+      stickyMissingRole: undefined,
       singleRole: undefined
     };
     this.emitState();
@@ -556,14 +631,20 @@ export class HandWizardController {
     this.singleStableMs = 0;
     this.handOffset = { x: 0, y: 0, z: 0 };
     this.handScale = 0;
+    this.handRotation = { x: 0, y: 0, z: 0 };
     this.leftHandOffset = { x: 0, y: 0, z: 0 };
     this.leftHandScale = 0;
+    this.leftHandRotation = { x: 0, y: 0, z: 0 };
     this.leftFingerSignal = 0;
     this.leftFingerCurls = createZeroFingerCurls();
     this.rightHandOffset = { x: 0, y: 0, z: 0 };
     this.rightHandScale = 0;
+    this.rightHandRotation = { x: 0, y: 0, z: 0 };
     this.rightFingerSignal = 0;
     this.rightFingerCurls = createZeroFingerCurls();
+    this.lastDualLeftPalm = undefined;
+    this.lastDualRightPalm = undefined;
+    this.lastDualSeenAt = 0;
   }
 
   private cloneLandmarks(landmarks: LegacyLandmark[] | undefined): Vec3[] | undefined {
@@ -576,6 +657,17 @@ export class HandWizardController {
       y: landmark.y,
       z: landmark.z
     }));
+  }
+
+  private clonePalmPose(palm: PalmPose): PalmPose {
+    return {
+      x: palm.x,
+      y: palm.y,
+      z: palm.z,
+      thumbTip: palm.thumbTip ? { ...palm.thumbTip } : undefined,
+      indexTip: palm.indexTip ? { ...palm.indexTip } : undefined,
+      landmarks: palm.landmarks ? palm.landmarks.map((landmark) => ({ ...landmark })) : undefined
+    };
   }
 
   private resolveSingleRole(singleRawX: number, label?: string): "left" | "right" {
@@ -591,7 +683,8 @@ export class HandWizardController {
   }
 
   private handleResults(results: LegacyHandsResults): void {
-    this.lastHandTime = Date.now();
+    const now = Date.now();
+    this.lastHandTime = now;
 
     const landmarks = results.multiHandLandmarks;
     if (!landmarks || landmarks.length < 1) {
@@ -600,6 +693,13 @@ export class HandWizardController {
       this.rightFingerSignal *= 0.9;
       this.leftFingerCurls = smoothFingerCurls(this.leftFingerCurls, zeroCurls, 0.12);
       this.rightFingerCurls = smoothFingerCurls(this.rightFingerCurls, zeroCurls, 0.12);
+      this.leftHandRotation = smoothHandRotation(this.leftHandRotation, { x: 0, y: 0, z: 0 }, 0.12);
+      this.rightHandRotation = smoothHandRotation(this.rightHandRotation, { x: 0, y: 0, z: 0 }, 0.12);
+      this.handRotation = {
+        x: (this.leftHandRotation.x + this.rightHandRotation.x) / 2,
+        y: (this.leftHandRotation.y + this.rightHandRotation.y) / 2,
+        z: (this.leftHandRotation.z + this.rightHandRotation.z) / 2
+      };
       this.uiState.debug = {
         ...this.uiState.debug,
         palmCount: 0,
@@ -621,6 +721,11 @@ export class HandWizardController {
         mappedFingerRight: this.rightFingerSignal,
         mappedFingerCurlsLeft: this.leftFingerCurls,
         mappedFingerCurlsRight: this.rightFingerCurls,
+        mappedRotation: { ...this.handRotation },
+        mappedRotationLeft: { ...this.leftHandRotation },
+        mappedRotationRight: { ...this.rightHandRotation },
+        dualStickyActive: false,
+        stickyMissingRole: undefined,
         singleRole: undefined,
         sharedRatio: this.uiState.debug.sharedRatio
       };
@@ -671,6 +776,13 @@ export class HandWizardController {
       this.rightFingerSignal *= 0.88;
       this.leftFingerCurls = smoothFingerCurls(this.leftFingerCurls, zeroCurls, 0.12);
       this.rightFingerCurls = smoothFingerCurls(this.rightFingerCurls, zeroCurls, 0.12);
+      this.leftHandRotation = smoothHandRotation(this.leftHandRotation, { x: 0, y: 0, z: 0 }, 0.12);
+      this.rightHandRotation = smoothHandRotation(this.rightHandRotation, { x: 0, y: 0, z: 0 }, 0.12);
+      this.handRotation = {
+        x: (this.leftHandRotation.x + this.rightHandRotation.x) / 2,
+        y: (this.leftHandRotation.y + this.rightHandRotation.y) / 2,
+        z: (this.leftHandRotation.z + this.rightHandRotation.z) / 2
+      };
       this.uiState.handMode = "none";
       this.uiState.handTrackingState = "ready";
       this.uiState.statusText = INACTIVE_STATUS;
@@ -699,6 +811,11 @@ export class HandWizardController {
         mappedFingerRight: this.rightFingerSignal,
         mappedFingerCurlsLeft: this.leftFingerCurls,
         mappedFingerCurlsRight: this.rightFingerCurls,
+        mappedRotation: { ...this.handRotation },
+        mappedRotationLeft: { ...this.leftHandRotation },
+        mappedRotationRight: { ...this.rightHandRotation },
+        dualStickyActive: false,
+        stickyMissingRole: undefined,
         singleRole: undefined
       };
       this.emitState();
@@ -706,14 +823,28 @@ export class HandWizardController {
     }
 
     if (assignment.mode === "single") {
+      const single = assignment.single;
+      const singleRole = this.resolveSingleRole(single.x, candidates[0]?.label);
+      const stickyMissingRole = singleRole === "left" ? "right" : "left";
+      const stickyEligible =
+        this.dualCalibrated &&
+        this.lastDualLeftPalm !== undefined &&
+        this.lastDualRightPalm !== undefined &&
+        now - this.lastDualSeenAt <= DUAL_STICKY_GRACE_MS;
+
+      if (stickyEligible) {
+        const leftPalm = singleRole === "left" ? single : this.lastDualLeftPalm!;
+        const rightPalm = singleRole === "right" ? single : this.lastDualRightPalm!;
+        this.processDualPose(leftPalm, rightPalm, true, stickyMissingRole);
+        return;
+      }
+
       this.singleStableMs = updateCalibrationTimer(this.singleStableMs, true, 16);
       if (!this.dualCalibrated) {
         this.calibTimerMs = 0;
       }
       this.recalibrationTimerMs = 0;
       this.recalibrationLatched = false;
-      const single = assignment.single;
-      const singleRole = this.resolveSingleRole(single.x, candidates[0]?.label);
       const singleCurls = computeFingerCurls(single.landmarks);
       const zeroCurls = createZeroFingerCurls();
 
@@ -738,38 +869,57 @@ export class HandWizardController {
         leftCalibrationReady: false,
         rightCalibrationReady: false,
         calibrationTimerMs: 0,
+        dualStickyActive: false,
+        stickyMissingRole: undefined,
         singleRole
       };
 
       if (this.singleStableMs < SINGLE_FALLBACK_HOLD_MS) {
         this.leftFingerCurls = smoothFingerCurls(this.leftFingerCurls, singleRole === "left" ? singleCurls : zeroCurls, 0.22);
         this.rightFingerCurls = smoothFingerCurls(this.rightFingerCurls, singleRole === "right" ? singleCurls : zeroCurls, 0.22);
+        this.leftHandRotation = smoothHandRotation(this.leftHandRotation, { x: 0, y: 0, z: 0 }, 0.22);
+        this.rightHandRotation = smoothHandRotation(this.rightHandRotation, { x: 0, y: 0, z: 0 }, 0.22);
+        this.handRotation = {
+          x: (this.leftHandRotation.x + this.rightHandRotation.x) / 2,
+          y: (this.leftHandRotation.y + this.rightHandRotation.y) / 2,
+          z: (this.leftHandRotation.z + this.rightHandRotation.z) / 2
+        };
         this.uiState.handMode = "none";
         this.uiState.handTrackingState = "ready";
         this.uiState.statusText = WAIT_SINGLE_STATUS;
         this.uiState.statusColor = "#00ffff";
         this.uiState.wizardActive = false;
         this.uiState.overlayOpacity = this.dualCalibrated ? OVERLAY_ACTIVE_FAINT_OPACITY : OVERLAY_READY_OPACITY;
+        this.uiState.debug.mappedRotation = { ...this.handRotation };
+        this.uiState.debug.mappedRotationLeft = { ...this.leftHandRotation };
+        this.uiState.debug.mappedRotationRight = { ...this.rightHandRotation };
         this.emitState();
         return;
       }
 
       if (!this.singleNeutralSet) {
-        this.neutralSingle = { x: single.x, y: single.y, z: single.z };
+        this.neutralSingle = this.clonePalmPose(single);
         this.singleNeutralSet = true;
       }
 
       const mapped = mapSingleHandPose(single, this.neutralSingle);
+      const mappedRotation = mapHandRotationPose(single.landmarks, this.neutralSingle.landmarks, singleRole);
       const leftTargetOffset = singleRole === "left" ? mapped.offset : { x: 0, y: 0, z: 0 };
       const rightTargetOffset = singleRole === "right" ? mapped.offset : { x: 0, y: 0, z: 0 };
       const leftTargetScale = singleRole === "left" ? mapped.spread : 0;
       const rightTargetScale = singleRole === "right" ? mapped.spread : 0;
+      const leftTargetRotation = singleRole === "left" ? mappedRotation : { x: 0, y: 0, z: 0 };
+      const rightTargetRotation = singleRole === "right" ? mappedRotation : { x: 0, y: 0, z: 0 };
       const leftSmooth = smoothHandState(this.leftHandOffset, this.leftHandScale, leftTargetOffset, leftTargetScale, 0.22);
       const rightSmooth = smoothHandState(this.rightHandOffset, this.rightHandScale, rightTargetOffset, rightTargetScale, 0.22);
+      const leftRotationSmooth = smoothHandRotation(this.leftHandRotation, leftTargetRotation, 0.22);
+      const rightRotationSmooth = smoothHandRotation(this.rightHandRotation, rightTargetRotation, 0.22);
       this.leftHandOffset = leftSmooth.offset;
       this.leftHandScale = leftSmooth.scale;
       this.rightHandOffset = rightSmooth.offset;
       this.rightHandScale = rightSmooth.scale;
+      this.leftHandRotation = leftRotationSmooth;
+      this.rightHandRotation = rightRotationSmooth;
       this.leftFingerSignal = this.leftFingerSignal * 0.78 + (singleRole === "left" ? mapped.fingerSignal : 0) * 0.22;
       this.rightFingerSignal = this.rightFingerSignal * 0.78 + (singleRole === "right" ? mapped.fingerSignal : 0) * 0.22;
       this.leftFingerCurls = smoothFingerCurls(this.leftFingerCurls, singleRole === "left" ? singleCurls : zeroCurls, 0.22);
@@ -780,6 +930,11 @@ export class HandWizardController {
         z: (leftSmooth.offset.z + rightSmooth.offset.z) / 2
       };
       this.handScale = (leftSmooth.scale + rightSmooth.scale) / 2;
+      this.handRotation = {
+        x: (leftRotationSmooth.x + rightRotationSmooth.x) / 2,
+        y: (leftRotationSmooth.y + rightRotationSmooth.y) / 2,
+        z: (leftRotationSmooth.z + rightRotationSmooth.z) / 2
+      };
 
       this.uiState.handMode = "single";
       this.uiState.handTrackingState = "active";
@@ -799,16 +954,30 @@ export class HandWizardController {
         mappedFingerRight: this.rightFingerSignal,
         mappedFingerCurlsLeft: this.leftFingerCurls,
         mappedFingerCurlsRight: this.rightFingerCurls,
+        mappedRotation: { ...this.handRotation },
+        mappedRotationLeft: { ...this.leftHandRotation },
+        mappedRotationRight: { ...this.rightHandRotation },
+        dualStickyActive: false,
+        stickyMissingRole: undefined,
         singleRole
       };
       this.emitState();
       return;
     }
 
-    this.singleStableMs = 0;
-    const leftPalm = assignment.left;
-    const rightPalm = assignment.right;
+    this.lastDualLeftPalm = this.clonePalmPose(assignment.left);
+    this.lastDualRightPalm = this.clonePalmPose(assignment.right);
+    this.lastDualSeenAt = now;
+    this.processDualPose(assignment.left, assignment.right, false);
+  }
 
+  private processDualPose(
+    leftPalm: PalmPose,
+    rightPalm: PalmPose,
+    sticky = false,
+    stickyMissingRole?: "left" | "right"
+  ): void {
+    this.singleStableMs = 0;
     const centerX = (leftPalm.x + rightPalm.x) / 2;
     const centerY = (leftPalm.y + rightPalm.y) / 2;
     const targetState = evaluateDualPalmTargets(leftPalm, rightPalm);
@@ -835,11 +1004,13 @@ export class HandWizardController {
       leftCalibrationReady,
       rightCalibrationReady,
       calibrationTimerMs: this.calibTimerMs,
+      dualStickyActive: sticky,
+      stickyMissingRole,
       singleRole: undefined
     };
 
     if (!this.dualCalibrated) {
-      this.calibTimerMs = updateCalibrationTimer(this.calibTimerMs, inCenter, 16);
+      this.calibTimerMs = updateCalibrationTimer(this.calibTimerMs, !sticky && inCenter, 16);
       this.uiState.debug.calibrationTimerMs = this.calibTimerMs;
       this.uiState.overlayOpacity = inCenter ? OVERLAY_HOLD_OPACITY : OVERLAY_READY_OPACITY;
       this.uiState.handMode = "none";
@@ -849,8 +1020,8 @@ export class HandWizardController {
       this.uiState.wizardActive = false;
 
       if (shouldActivateCalibration(this.calibTimerMs, CALIBRATION_HOLD_MS)) {
-        this.neutralLeft = { ...leftPalm };
-        this.neutralRight = { ...rightPalm };
+        this.neutralLeft = this.clonePalmPose(leftPalm);
+        this.neutralRight = this.clonePalmPose(rightPalm);
         this.dualCalibrated = true;
         this.calibTimerMs = 0;
         this.recalibrationTimerMs = 0;
@@ -870,16 +1041,22 @@ export class HandWizardController {
 
     const mappedLeft = mapLeftHandPose(leftPalm, this.neutralLeft);
     const mappedRight = mapRightHandPose(rightPalm, this.neutralRight);
+    const mappedRotationLeft = mapHandRotationPose(leftPalm.landmarks, this.neutralLeft.landmarks, "left");
+    const mappedRotationRight = mapHandRotationPose(rightPalm.landmarks, this.neutralRight.landmarks, "right");
     const mappedCurlsLeft = computeFingerCurls(leftPalm.landmarks);
     const mappedCurlsRight = computeFingerCurls(rightPalm.landmarks);
 
     const leftSmooth = smoothHandState(this.leftHandOffset, this.leftHandScale, mappedLeft.offset, mappedLeft.spread, 0.22);
     const rightSmooth = smoothHandState(this.rightHandOffset, this.rightHandScale, mappedRight.offset, mappedRight.spread, 0.22);
+    const leftRotationSmooth = smoothHandRotation(this.leftHandRotation, mappedRotationLeft, 0.22);
+    const rightRotationSmooth = smoothHandRotation(this.rightHandRotation, mappedRotationRight, 0.22);
 
     this.leftHandOffset = leftSmooth.offset;
     this.leftHandScale = leftSmooth.scale;
     this.rightHandOffset = rightSmooth.offset;
     this.rightHandScale = rightSmooth.scale;
+    this.leftHandRotation = leftRotationSmooth;
+    this.rightHandRotation = rightRotationSmooth;
     this.leftFingerSignal = mappedLeft.fingerSignal;
     this.rightFingerSignal = mappedRight.fingerSignal;
     this.leftFingerCurls = smoothFingerCurls(this.leftFingerCurls, mappedCurlsLeft, 0.22);
@@ -890,20 +1067,25 @@ export class HandWizardController {
       z: (leftSmooth.offset.z + rightSmooth.offset.z) / 2
     };
     this.handScale = (leftSmooth.scale + rightSmooth.scale) / 2;
+    this.handRotation = {
+      x: (leftRotationSmooth.x + rightRotationSmooth.x) / 2,
+      y: (leftRotationSmooth.y + rightRotationSmooth.y) / 2,
+      z: (leftRotationSmooth.z + rightRotationSmooth.z) / 2
+    };
 
     this.uiState.handMode = "dual";
     this.uiState.handTrackingState = "active";
     this.uiState.wizardActive = true;
     this.uiState.overlayOpacity = OVERLAY_ACTIVE_FAINT_OPACITY;
 
-    if (inCenter) {
+    if (!sticky && inCenter) {
       if (!this.recalibrationLatched) {
         this.recalibrationTimerMs = updateCalibrationTimer(this.recalibrationTimerMs, true, 16);
         this.uiState.statusText = RECALIBRATING_STATUS;
         this.uiState.statusColor = "#8affdd";
         if (shouldActivateCalibration(this.recalibrationTimerMs, RECALIBRATION_HOLD_MS)) {
-          this.neutralLeft = { ...leftPalm };
-          this.neutralRight = { ...rightPalm };
+          this.neutralLeft = this.clonePalmPose(leftPalm);
+          this.neutralRight = this.clonePalmPose(rightPalm);
           this.recalibrationTimerMs = 0;
           this.recalibrationLatched = true;
           this.uiState.statusText = ACTIVE_DUAL_STATUS;
@@ -934,6 +1116,11 @@ export class HandWizardController {
       mappedFingerRight: this.rightFingerSignal,
       mappedFingerCurlsLeft: this.leftFingerCurls,
       mappedFingerCurlsRight: this.rightFingerCurls,
+      mappedRotation: { ...this.handRotation },
+      mappedRotationLeft: { ...this.leftHandRotation },
+      mappedRotationRight: { ...this.rightHandRotation },
+      dualStickyActive: sticky,
+      stickyMissingRole,
       singleRole: undefined
     };
     this.emitState();
@@ -971,14 +1158,20 @@ export class HandWizardController {
     this.singleStableMs = 0;
     this.handOffset = { x: 0, y: 0, z: 0 };
     this.handScale = 0;
+    this.handRotation = { x: 0, y: 0, z: 0 };
     this.leftHandOffset = { x: 0, y: 0, z: 0 };
     this.leftHandScale = 0;
+    this.leftHandRotation = { x: 0, y: 0, z: 0 };
     this.leftFingerSignal = 0;
     this.leftFingerCurls = createZeroFingerCurls();
     this.rightHandOffset = { x: 0, y: 0, z: 0 };
     this.rightHandScale = 0;
+    this.rightHandRotation = { x: 0, y: 0, z: 0 };
     this.rightFingerSignal = 0;
     this.rightFingerCurls = createZeroFingerCurls();
+    this.lastDualLeftPalm = undefined;
+    this.lastDualRightPalm = undefined;
+    this.lastDualSeenAt = 0;
 
     this.uiState.webcamVisible = true;
     this.uiState.overlayOpacity = OVERLAY_READY_OPACITY;

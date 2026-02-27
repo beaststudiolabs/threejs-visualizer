@@ -4,6 +4,8 @@ export type Vec3 = {
   z: number;
 };
 
+export type HandRotation = Vec3;
+
 export type Vec3WithFingers = Vec3 & {
   thumbTip?: Vec3;
   indexTip?: Vec3;
@@ -261,6 +263,117 @@ export const smoothFingerCurls = (current: FingerCurls, target: FingerCurls, ler
     middle: current.middle * keep + target.middle * amount,
     ring: current.ring * keep + target.ring * amount,
     pinky: current.pinky * keep + target.pinky * amount
+  };
+};
+
+const subtractVec3 = (a: Vec3, b: Vec3): Vec3 => ({
+  x: a.x - b.x,
+  y: a.y - b.y,
+  z: a.z - b.z
+});
+
+const vec3Length = (v: Vec3): number => Math.hypot(v.x, v.y, v.z);
+
+const normalizeVec3 = (v: Vec3): Vec3 | undefined => {
+  const len = vec3Length(v);
+  if (len < 1e-6) {
+    return undefined;
+  }
+  return {
+    x: v.x / len,
+    y: v.y / len,
+    z: v.z / len
+  };
+};
+
+const crossVec3 = (a: Vec3, b: Vec3): Vec3 => ({
+  x: a.y * b.z - a.z * b.y,
+  y: a.z * b.x - a.x * b.z,
+  z: a.x * b.y - a.y * b.x
+});
+
+const normalizeAngle = (angle: number): number => {
+  if (!Number.isFinite(angle)) {
+    return 0;
+  }
+  let next = angle;
+  while (next > Math.PI) {
+    next -= Math.PI * 2;
+  }
+  while (next < -Math.PI) {
+    next += Math.PI * 2;
+  }
+  return next;
+};
+
+const resolveHandAxes = (landmarks: Vec3[] | undefined): { across: Vec3; forward: Vec3; normal: Vec3 } | undefined => {
+  if (!landmarks || landmarks.length < 18) {
+    return undefined;
+  }
+  const wrist = landmarks[0];
+  const indexMcp = landmarks[5];
+  const middleMcp = landmarks[9];
+  const pinkyMcp = landmarks[17];
+  if (!wrist || !indexMcp || !middleMcp || !pinkyMcp) {
+    return undefined;
+  }
+
+  const across = normalizeVec3(subtractVec3(indexMcp, pinkyMcp));
+  const forward = normalizeVec3(subtractVec3(middleMcp, wrist));
+  if (!across || !forward) {
+    return undefined;
+  }
+
+  const normal = normalizeVec3(crossVec3(across, forward));
+  if (!normal) {
+    return undefined;
+  }
+
+  return {
+    across,
+    forward,
+    normal
+  };
+};
+
+const computeHandRotation = (landmarks: Vec3[] | undefined): HandRotation | undefined => {
+  const axes = resolveHandAxes(landmarks);
+  if (!axes) {
+    return undefined;
+  }
+
+  return {
+    x: Math.atan2(axes.forward.z, Math.hypot(axes.forward.x, axes.forward.y)),
+    y: Math.atan2(axes.normal.x, axes.normal.z),
+    z: Math.atan2(axes.across.y, axes.across.x)
+  };
+};
+
+export const mapHandRotationPose = (
+  landmarks: Vec3[] | undefined,
+  neutralLandmarks: Vec3[] | undefined,
+  role: "left" | "right"
+): HandRotation => {
+  const current = computeHandRotation(landmarks);
+  const neutral = computeHandRotation(neutralLandmarks);
+  if (!current || !neutral) {
+    return { x: 0, y: 0, z: 0 };
+  }
+
+  const mirrorSign = role === "left" ? 1 : -1;
+  return {
+    x: normalizeAngle(current.x - neutral.x),
+    y: normalizeAngle((current.y - neutral.y) * mirrorSign),
+    z: normalizeAngle((current.z - neutral.z) * mirrorSign)
+  };
+};
+
+export const smoothHandRotation = (current: HandRotation, target: HandRotation, lerp = 0.22): HandRotation => {
+  const amount = clamp01(lerp);
+  return {
+    x: normalizeAngle(current.x + normalizeAngle(target.x - current.x) * amount),
+    y: normalizeAngle(current.y + normalizeAngle(target.y - current.y) * amount),
+    z: normalizeAngle(current.z + normalizeAngle(target.z - current.z) * amount)
   };
 };
 

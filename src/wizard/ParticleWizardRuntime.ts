@@ -96,6 +96,11 @@ const DEFAULT_HAND_DEBUG: HandDebugInfo = {
   mappedFingerRight: 0,
   mappedFingerCurlsLeft: createZeroFingerCurls(),
   mappedFingerCurlsRight: createZeroFingerCurls(),
+  mappedRotation: { x: 0, y: 0, z: 0 },
+  mappedRotationLeft: { x: 0, y: 0, z: 0 },
+  mappedRotationRight: { x: 0, y: 0, z: 0 },
+  dualStickyActive: false,
+  stickyMissingRole: undefined,
   singleRole: undefined,
   staleMs: 0
 };
@@ -159,6 +164,7 @@ type ParticleSideUniforms = {
   targetMode: { value: number };
   morph: { value: number };
   handOffset: { value: THREE.Vector3 };
+  handRotation: { value: THREE.Vector3 };
   handScale: { value: number };
   handFingerSignal: { value: number };
   handFingerCurlsA: { value: THREE.Vector4 };
@@ -692,6 +698,7 @@ export class ParticleWizardRuntime {
       targetMode: { value: this.targetMode },
       morph: { value: previous?.morph.value ?? this.morphProgress },
       handOffset: { value: previous?.handOffset.value ? previous.handOffset.value.clone() : new THREE.Vector3(0, 0, 0) },
+      handRotation: { value: previous?.handRotation.value ? previous.handRotation.value.clone() : new THREE.Vector3(0, 0, 0) },
       handScale: { value: previous?.handScale.value ?? 0 },
       handFingerSignal: { value: previous?.handFingerSignal.value ?? 0 },
       handFingerCurlsA: {
@@ -772,6 +779,7 @@ export class ParticleWizardRuntime {
       uniform int targetMode;
       uniform float morph;
       uniform vec3 handOffset;
+      uniform vec3 handRotation;
       uniform float handScale;
       uniform float handFingerSignal;
       uniform vec4 handFingerCurlsA;
@@ -794,6 +802,30 @@ export class ParticleWizardRuntime {
         float s = pow(abs(sin(m * angle * 0.25) / b), n3);
         float value = pow(c + s, -1.0 / n1);
         return clamp(value, 0.0, 3.0);
+      }
+
+      vec3 rotateX3(vec3 v, float angle) {
+        float c = cos(angle);
+        float s = sin(angle);
+        return vec3(v.x, v.y * c - v.z * s, v.y * s + v.z * c);
+      }
+
+      vec3 rotateY3(vec3 v, float angle) {
+        float c = cos(angle);
+        float s = sin(angle);
+        return vec3(v.x * c + v.z * s, v.y, -v.x * s + v.z * c);
+      }
+
+      vec3 rotateZ3(vec3 v, float angle) {
+        float c = cos(angle);
+        float s = sin(angle);
+        return vec3(v.x * c - v.y * s, v.x * s + v.y * c, v.z);
+      }
+
+      vec3 rotateXYZ(vec3 v, vec3 euler) {
+        vec3 xRot = rotateX3(v, euler.x);
+        vec3 yRot = rotateY3(xRot, euler.y);
+        return rotateZ3(yRot, euler.z);
       }
 
       vec3 getPos(int mode, float t, float a, float b) {
@@ -1017,6 +1049,7 @@ export class ParticleWizardRuntime {
         vAlphaGain = mix(1.0, 0.22 + 0.78 * presence, handsModeMix);
 
         pos.x *= mix(1.0, -1.0, rightSide);
+        pos = rotateXYZ(pos, handRotation);
         pos.x += mix(-modelSeparation, modelSeparation, rightSide);
 
         float normalizedFingerSignal = clamp(handFingerSignal, 0.0, 1.0);
@@ -1226,6 +1259,8 @@ export class ParticleWizardRuntime {
     const rightHandOffset = this.handController.getRightOffset();
     const leftHandScale = this.handController.getLeftScale();
     const rightHandScale = this.handController.getRightScale();
+    const leftHandRotation = this.handController.getLeftRotation();
+    const rightHandRotation = this.handController.getRightRotation();
     const leftFingerSignal = this.handController.getLeftFingerSignal();
     const rightFingerSignal = this.handController.getRightFingerSignal();
     const leftFingerCurls = this.handController.getLeftFingerCurls();
@@ -1237,6 +1272,7 @@ export class ParticleWizardRuntime {
     const sharedRatio = computeSharedRatio(this.leftCenter.distanceTo(this.rightCenter), SHARED_NEAR_DISTANCE, SHARED_FAR_DISTANCE);
 
     this.leftParticleUniforms.handOffset.value.set(leftHandOffset.x, leftHandOffset.y, leftHandOffset.z);
+    this.leftParticleUniforms.handRotation.value.set(leftHandRotation.x, leftHandRotation.y, leftHandRotation.z);
     this.leftParticleUniforms.handScale.value = leftHandScale;
     this.leftParticleUniforms.handFingerSignal.value = leftFingerSignal;
     setFingerVectorA(this.leftParticleUniforms.handFingerCurlsA.value, leftFingerCurls);
@@ -1244,6 +1280,7 @@ export class ParticleWizardRuntime {
     this.leftParticleUniforms.sharedRatio.value = sharedRatio;
 
     this.rightParticleUniforms.handOffset.value.set(rightHandOffset.x, rightHandOffset.y, rightHandOffset.z);
+    this.rightParticleUniforms.handRotation.value.set(rightHandRotation.x, rightHandRotation.y, rightHandRotation.z);
     this.rightParticleUniforms.handScale.value = rightHandScale;
     this.rightParticleUniforms.handFingerSignal.value = rightFingerSignal;
     setFingerVectorA(this.rightParticleUniforms.handFingerCurlsA.value, rightFingerCurls);

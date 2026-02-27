@@ -805,10 +805,17 @@ export const App = (): JSX.Element => {
             <div className="debug-line">
               Shared: {hud.handDebug.sharedRatio?.toFixed(2) ?? "0"} | Budget: {hud.handDebug.sharedBudget ?? 0}
             </div>
+            <div className="debug-line">
+              Dual sticky: {String(hud.handDebug.dualStickyActive)} | missing {hud.handDebug.stickyMissingRole ?? "none"}
+            </div>
             <div className="debug-line">Single role: {hud.handDebug.singleRole ?? "none"}</div>
             <div className="debug-line">
               Left: ({hud.handDebug.mappedOffsetLeft.x.toFixed(2)}, {hud.handDebug.mappedOffsetLeft.y.toFixed(2)},{" "}
               {hud.handDebug.mappedOffsetLeft.z.toFixed(2)}) s={hud.handDebug.mappedScaleLeft.toFixed(2)} f={hud.handDebug.mappedFingerLeft.toFixed(2)}
+            </div>
+            <div className="debug-line">
+              Left rot: ({hud.handDebug.mappedRotationLeft.x.toFixed(2)}, {hud.handDebug.mappedRotationLeft.y.toFixed(2)},{" "}
+              {hud.handDebug.mappedRotationLeft.z.toFixed(2)})
             </div>
             <div className="debug-line">
               Left curls: t={hud.handDebug.mappedFingerCurlsLeft.thumb.toFixed(2)} i={hud.handDebug.mappedFingerCurlsLeft.index.toFixed(2)} m=
@@ -818,6 +825,10 @@ export const App = (): JSX.Element => {
             <div className="debug-line">
               Right: ({hud.handDebug.mappedOffsetRight.x.toFixed(2)}, {hud.handDebug.mappedOffsetRight.y.toFixed(2)},{" "}
               {hud.handDebug.mappedOffsetRight.z.toFixed(2)}) s={hud.handDebug.mappedScaleRight.toFixed(2)} f={hud.handDebug.mappedFingerRight.toFixed(2)}
+            </div>
+            <div className="debug-line">
+              Right rot: ({hud.handDebug.mappedRotationRight.x.toFixed(2)}, {hud.handDebug.mappedRotationRight.y.toFixed(2)},{" "}
+              {hud.handDebug.mappedRotationRight.z.toFixed(2)})
             </div>
             <div className="debug-line">
               Right curls: t={hud.handDebug.mappedFingerCurlsRight.thumb.toFixed(2)} i={hud.handDebug.mappedFingerCurlsRight.index.toFixed(2)} m=
