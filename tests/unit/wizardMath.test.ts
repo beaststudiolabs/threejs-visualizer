@@ -9,14 +9,17 @@ import {
   evaluateDualPalmTargets,
   isCalibrationCenter,
   mapLeftHandPose,
+  mapHandPoseForModel,
   mapRightHandPose,
   mapHandPose,
   mapHandRotationPose,
+  resolvePalmAssignment,
   mirrorWebcamX,
   shouldActivateCalibration,
   smoothHandRotation,
   smoothBass,
   smoothHandState,
+  type PalmCandidate,
   updateCalibrationTimer
 } from "../../src/wizard/math";
 
@@ -95,6 +98,36 @@ const rotateZ = (point: { x: number; y: number; z: number }, angle: number): { x
     x: point.x * c - point.y * s,
     y: point.x * s + point.y * c,
     z: point.z
+  };
+};
+
+const createPalmCandidate = ({
+  candidateX = 0.5,
+  label,
+  displayXAnchorX,
+  includePalmMcp = true,
+  explicitX
+}: {
+  candidateX?: number;
+  label?: string;
+  displayXAnchorX?: number;
+  includePalmMcp?: boolean;
+  explicitX?: number;
+}): PalmCandidate => {
+  const landmarks = Array.from({ length: 21 }, () => ({ x: 0.5, y: 0.5, z: 0 }));
+  const anchorX = displayXAnchorX ?? candidateX;
+  if (includePalmMcp) {
+    landmarks[9] = { x: anchorX, y: 0.5, z: 0 };
+  } else {
+    landmarks[0] = { x: anchorX, y: 0.5, z: 0 };
+  }
+
+  return {
+    x: explicitX ?? candidateX,
+    y: 0.5,
+    z: 0,
+    label,
+    landmarks
   };
 };
 
@@ -260,6 +293,91 @@ describe("wizard math helpers", () => {
       expect(Number.isFinite(sample.x)).toBe(true);
       expect(Number.isFinite(sample.y)).toBe(true);
       expect(Number.isFinite(sample.z)).toBe(true);
+    }
+  });
+
+  it("clamps aggressive single-hand mapping deltas for hand-mode stability", () => {
+    const mapped = mapHandPoseForModel(
+      { x: 0.9, y: 0.1, z: 0.35 },
+      { x: 0.04, y: 0.86, z: -0.08 }
+    );
+
+    expect(Math.abs(mapped.offset.x)).toBeLessThanOrEqual(2.2);
+    expect(Math.abs(mapped.offset.y)).toBeLessThanOrEqual(2.2);
+    expect(Math.abs(mapped.offset.z)).toBeLessThanOrEqual(2.2);
+    expect(mapped.spread).toBeLessThanOrEqual(2.2);
+    expect(mapped.spread).toBeGreaterThan(0.8);
+  });
+
+  it("keeps mode 10 anatomy regions coherent across boundaries", () => {
+    const t = 0.95;
+    const b = 0.41;
+    const samples = [0.44, 0.46, 0.51, 0.62, 0.73, 0.84, 0.96].map((a) => computeModePosition(10, t, a, b));
+    for (let i = 1; i < samples.length; i += 1) {
+      const current = samples[i];
+      const prev = samples[i - 1];
+      const step = Math.hypot(current.x - prev.x, current.y - prev.y, current.z - prev.z);
+      expect(step).toBeLessThan(12);
+      expect(Number.isFinite(step)).toBe(true);
+    }
+
+    const thumb = samples[2];
+    const index = samples[3];
+    const middle = samples[4];
+    const ring = samples[5];
+    const pinky = samples[6];
+    expect(thumb.x).toBeLessThan(index.x);
+    expect(index.x).toBeLessThan(middle.x);
+    expect(middle.x).toBeLessThan(ring.x);
+    expect(ring.x).toBeLessThan(pinky.x);
+  });
+
+  it("assigns dual roles by mirrored x ordering when handedness labels are swapped", () => {
+    const leftCandidate = createPalmCandidate({ candidateX: 0.35, label: "right", displayXAnchorX: 0.74 });
+    const rightCandidate = createPalmCandidate({ candidateX: 0.65, label: "left", displayXAnchorX: 0.26 });
+
+    const assignment = resolvePalmAssignment([leftCandidate, rightCandidate]);
+
+    expect(assignment.mode).toBe("dual");
+    if (assignment.mode === "dual") {
+      expect(assignment.source).toBe("sorted");
+      expect(assignment.left.x).toBeCloseTo(0.74, 5);
+      expect(assignment.right.x).toBeCloseTo(0.26, 5);
+    }
+  });
+
+  it("falls back to mirrored ordering for partial candidates missing index 9", () => {
+    const partial = createPalmCandidate({
+      candidateX: 0.12,
+      displayXAnchorX: 0.82,
+      includePalmMcp: false,
+      label: "left"
+    });
+    const full = createPalmCandidate({ candidateX: 0.88, displayXAnchorX: 0.18 });
+
+    const assignment = resolvePalmAssignment([partial, full]);
+
+    expect(assignment.mode).toBe("dual");
+    if (assignment.mode === "dual") {
+      expect(assignment.source).toBe("sorted");
+      expect(assignment.left.x).toBeCloseTo(0.82, 5);
+      expect(assignment.right.x).toBeCloseTo(0.18, 5);
+    }
+  });
+
+  it("uses mirror-sorted boundary values when >2 candidates are present", () => {
+    const leftMost = createPalmCandidate({ candidateX: 0.2 });
+    const middle = createPalmCandidate({ candidateX: 0.52, displayXAnchorX: 0.55 });
+    const rightMost = createPalmCandidate({ candidateX: 0.8 });
+
+    const assignment = resolvePalmAssignment([leftMost, middle, rightMost]);
+
+    expect(assignment.mode).toBe("dual");
+    if (assignment.mode === "dual") {
+      expect(assignment.left.x).toBeCloseTo(0.8, 5);
+      expect(assignment.right.x).toBeCloseTo(0.2, 5);
+      expect(assignment.left.landmarks?.[9]).toMatchObject({ x: 0.8 });
+      expect(assignment.right.landmarks?.[9]).toMatchObject({ x: 0.2 });
     }
   });
 

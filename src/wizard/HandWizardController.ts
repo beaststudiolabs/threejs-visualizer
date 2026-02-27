@@ -671,15 +671,14 @@ export class HandWizardController {
   }
 
   private resolveSingleRole(singleRawX: number, label?: string): "left" | "right" {
+    const mirroredRole: "left" | "right" = mirrorWebcamX(singleRawX) <= 0.5 ? "left" : "right";
     const normalized = label?.toLowerCase();
-    if (normalized === "left") {
-      return "left";
-    }
-    if (normalized === "right") {
-      return "right";
+
+    if (normalized === mirroredRole) {
+      return mirroredRole;
     }
 
-    return mirrorWebcamX(singleRawX) <= 0.5 ? "left" : "right";
+    return mirroredRole;
   }
 
   private handleResults(results: LegacyHandsResults): void {
@@ -736,7 +735,7 @@ export class HandWizardController {
     const candidates: PalmCandidate[] = [];
     for (let i = 0; i < landmarks.length; i += 1) {
       const handLandmarks = landmarks[i];
-      const palm = handLandmarks?.[9];
+      const palm = handLandmarks?.[9] ?? handLandmarks?.[0];
       if (!palm || !handLandmarks) {
         continue;
       }

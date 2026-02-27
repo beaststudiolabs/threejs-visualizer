@@ -385,14 +385,25 @@ export const mapHandPoseForModel = (
     yScale?: number;
     zScale?: number;
     fingerRange?: number;
+    spreadMax?: number;
   } = {}
 ): { offset: Vec3; spread: number; fingerSignal: number } => {
-  const offset = {
-    x: (palm.x - neutral.x) * (options.xScale ?? 22),
-    y: (palm.y - neutral.y) * (options.yScale ?? -18),
-    z: (palm.z - neutral.z) * (options.zScale ?? 12)
+  const spreadMax = clamp(options.spreadMax ?? 2.2, 0.01, 3.5);
+  const offsetScaleX = options.xScale ?? 16;
+  const offsetScaleY = options.yScale ?? -16;
+  const offsetScaleZ = options.zScale ?? 10;
+  const offsetClamp = spreadMax;
+  const rawOffset = {
+    x: (palm.x - neutral.x) * offsetScaleX,
+    y: (palm.y - neutral.y) * offsetScaleY,
+    z: (palm.z - neutral.z) * offsetScaleZ
   };
-  const spread = clamp(Math.hypot(offset.x, offset.y, offset.z), 0, 3.5);
+  const offset = {
+    x: clamp(rawOffset.x, -offsetClamp, offsetClamp),
+    y: clamp(rawOffset.y, -offsetClamp, offsetClamp),
+    z: clamp(rawOffset.z, -offsetClamp, offsetClamp)
+  };
+  const spread = clamp(Math.hypot(offset.x, offset.y, offset.z), 0, spreadMax);
   const fingerSignal = computeFingerSignal(palm, neutral, options.fingerRange ?? 0.2);
   return { offset, spread, fingerSignal };
 };
@@ -403,9 +414,9 @@ export const mapLeftHandPose = (
   options: Parameters<typeof mapHandPoseForModel>[2] = {}
 ): { offset: Vec3; spread: number; fingerSignal: number } =>
   mapHandPoseForModel(palm, neutral, {
-    xScale: options.xScale ?? 22,
-    yScale: options.yScale ?? -18,
-    zScale: options.zScale ?? 12,
+    xScale: options.xScale ?? 16,
+    yScale: options.yScale ?? -16,
+    zScale: options.zScale ?? 10,
     fingerRange: options.fingerRange ?? 0.2
   });
 
@@ -415,9 +426,9 @@ export const mapRightHandPose = (
   options: Parameters<typeof mapHandPoseForModel>[2] = {}
 ): { offset: Vec3; spread: number; fingerSignal: number } =>
   mapHandPoseForModel(palm, neutral, {
-    xScale: options.xScale ?? 22,
-    yScale: options.yScale ?? -18,
-    zScale: options.zScale ?? 12,
+    xScale: options.xScale ?? 16,
+    yScale: options.yScale ?? -16,
+    zScale: options.zScale ?? 10,
     fingerRange: options.fingerRange ?? 0.2
   });
 
@@ -501,75 +512,78 @@ export const smoothBass = (previous: number, raw: number): number => {
 };
 
 export const resolvePalmAssignment = (candidates: PalmCandidate[]): PalmAssignment => {
+  const anchorPoint = (candidate: PalmCandidate): Vec3 => {
+    const source = candidate.landmarks?.[9] ?? candidate.landmarks?.[0];
+    if (!source) {
+      return {
+        x: candidate.x,
+        y: candidate.y,
+        z: candidate.z
+      };
+    }
+
+    return {
+      x: source.x,
+      y: source.y,
+      z: source.z
+    };
+  };
+
+  const mirroredSortKey = (candidate: PalmCandidate): number => {
+    const anchor = anchorPoint(candidate);
+    return mirrorWebcamX(anchor.x);
+  };
+
   if (candidates.length === 0) {
     return { mode: "none", source: "none" };
   }
 
+  const projectToPalmPose = (candidate: PalmCandidate): PalmPose => {
+    const anchor = anchorPoint(candidate);
+    return {
+      x: anchor.x,
+      y: anchor.y,
+      z: anchor.z,
+      thumbTip: candidate.thumbTip,
+      indexTip: candidate.indexTip,
+      landmarks: candidate.landmarks
+    };
+  };
+
   if (candidates.length === 1) {
-    const palm = candidates[0];
+    const candidate = candidates[0];
     return {
       mode: "single",
       source: "single",
-      single: {
-        x: palm.x,
-        y: palm.y,
-        z: palm.z,
-        thumbTip: palm.thumbTip,
-        indexTip: palm.indexTip,
-        landmarks: palm.landmarks
-      }
+      single: projectToPalmPose(candidate)
     };
   }
 
-  const sortedForMirroredDisplay = [...candidates].sort((a, b) => b.x - a.x);
-  const leftFallback = sortedForMirroredDisplay[0];
-  const rightFallback = sortedForMirroredDisplay[sortedForMirroredDisplay.length - 1];
+  const sortedForMirroredDisplay = [...candidates].sort((a, b) => mirroredSortKey(a) - mirroredSortKey(b));
+  const leftFallbackCandidate = sortedForMirroredDisplay[0];
+  const rightFallbackCandidate = sortedForMirroredDisplay[sortedForMirroredDisplay.length - 1];
 
   const leftLabeled = candidates.find((candidate) => candidate.label?.toLowerCase() === "left");
   const rightLabeled = candidates.find((candidate) => candidate.label?.toLowerCase() === "right");
 
-  if (leftLabeled && rightLabeled) {
+  if (
+    leftLabeled &&
+    rightLabeled &&
+    mirroredSortKey(leftLabeled) <= mirroredSortKey(rightLabeled)
+  ) {
     return {
       mode: "dual",
       source: "labels",
-      left: {
-        x: leftLabeled.x,
-        y: leftLabeled.y,
-        z: leftLabeled.z,
-        thumbTip: leftLabeled.thumbTip,
-        indexTip: leftLabeled.indexTip,
-        landmarks: leftLabeled.landmarks
-      },
-      right: {
-        x: rightLabeled.x,
-        y: rightLabeled.y,
-        z: rightLabeled.z,
-        thumbTip: rightLabeled.thumbTip,
-        indexTip: rightLabeled.indexTip,
-        landmarks: rightLabeled.landmarks
-      }
+      left: projectToPalmPose(leftLabeled),
+      right: projectToPalmPose(rightLabeled)
     };
   }
 
   return {
     mode: "dual",
     source: "sorted",
-    left: {
-      x: leftFallback.x,
-      y: leftFallback.y,
-      z: leftFallback.z,
-      thumbTip: leftFallback.thumbTip,
-      indexTip: leftFallback.indexTip,
-      landmarks: leftFallback.landmarks
-    },
-    right: {
-      x: rightFallback.x,
-      y: rightFallback.y,
-      z: rightFallback.z,
-      thumbTip: rightFallback.thumbTip,
-      indexTip: rightFallback.indexTip,
-      landmarks: rightFallback.landmarks
-    }
+    left: projectToPalmPose(leftFallbackCandidate),
+    right: projectToPalmPose(rightFallbackCandidate)
   };
 };
 
@@ -738,17 +752,22 @@ export const computeModePosition = (mode: number, t: number, a: number, b: numbe
   const ringShare = 0.89;
 
   if (a < palmShare) {
-    const local = a / palmShare;
-    const wristTaper = 1 - Math.pow(local, 1.8);
-    const theta = b * tau;
-    const palmRadiusX = 3.6 + 1.7 * local;
-    const palmRadiusY = 2.1 + 0.8 * local;
-    p.x = Math.cos(theta) * palmRadiusX + Math.sin(t * 1.2 + local * 8) * 0.35;
-    p.y = Math.sin(theta) * palmRadiusY + (local - 0.35) * 1.4;
-    p.z = (0.5 - local) * 4.2 + Math.cos(theta * 2 + t * 0.8) * 0.5;
+    const local = clamp01(a / palmShare);
+    const palmSignal = Math.sin(t * 0.38 + b * 4.0) * 0.5 + 0.5;
+    const wristTaper = 1 - Math.pow(local, 1.75);
+    const theta = b * tau + t * 0.38;
+    const palmWidth = 2.9 + (4.15 - 2.9) * Math.pow(local, 0.8);
+    const handLift = -1.2 + local * 2.55;
+
+    p.x = Math.cos(theta) * palmWidth;
+    p.y = Math.sin(theta) * 1.05 * (0.78 + 0.22 * local) + handLift;
+    p.z = (0.62 - local) * 3.5 + Math.cos(theta * 1.6 + t * 0.8) * 0.48;
     p.x *= 0.75 + wristTaper * 0.25;
-    p.y *= 0.9 + wristTaper * 0.1;
-    p.z *= 0.9 + wristTaper * 0.1;
+    p.y *= 1.12 - 0.12 * wristTaper;
+    p.z *= 0.7 + 0.25 * (1 - local);
+    p.x += Math.sin(theta * 2.0 + t * 0.9 + local * 4.0) * (0.07 + palmSignal * 0.06);
+    p.y += Math.cos(theta * 2.1 + t * 1.1) * (0.05 + palmSignal * 0.04);
+    p.z += Math.sin(t * 1.2 + local * 9.0) * 0.06;
     return p;
   }
 
@@ -774,27 +793,92 @@ export const computeModePosition = (mode: number, t: number, a: number, b: numbe
   }
 
   const local = clamp01((a - start) / Math.max(1e-4, end - start));
-  const ring = b * tau;
-  const baseX = [-3.3, -1.25, 0.35, 1.75, 3.05][fingerIndex];
-  const baseY = [-0.55, 0.95, 1.25, 1.05, 0.7][fingerIndex];
-  const baseZ = [0.2, 1.1, 1.35, 1.05, 0.75][fingerIndex];
-  const length = [5.0, 6.4, 7.0, 6.5, 5.6][fingerIndex];
-  const radiusBase = [0.95, 0.72, 0.75, 0.7, 0.64][fingerIndex];
-  const radius = radiusBase * (1 - 0.55 * local);
+  const segment1 = clamp01(local * 3);
+  const segment2 = clamp01((local - 0.333) / 0.333);
+  const segment3 = clamp01((local - 0.666) / 0.334);
   const animatedCurl = 0.24 + 0.22 * (Math.sin(t * 0.75 + fingerIndex * 0.9) * 0.5 + 0.5);
-  const bend = animatedCurl * (0.45 + local * local * 1.35);
-  const along = local * length;
+  const curl = Math.min(1, Math.max(0, animatedCurl));
+  const curlEase = Math.sqrt(curl);
+  const isThumb = fingerIndex === 0;
 
-  const thumbYaw = fingerIndex === 0 ? -0.68 : 0;
-  const forwardX = Math.cos(thumbYaw) * Math.cos(bend);
-  const forwardY = Math.sin(bend) * (fingerIndex === 0 ? 0.75 : 1);
-  const forwardZ = Math.sin(thumbYaw) * Math.cos(bend);
+  let baseX = -3.15;
+  let baseY = -0.38;
+  let baseZ = 0.72;
+  let phalanx1 = 2.05;
+  let phalanx2 = 1.85;
+  let phalanx3 = 1.35;
+  let radiusBase = 0.88;
+  if (fingerIndex === 1) {
+    baseX = -1.25;
+    baseY = 0.84;
+    baseZ = 1.15;
+    phalanx1 = 2.45;
+    phalanx2 = 2.0;
+    phalanx3 = 1.45;
+    radiusBase = 0.76;
+  } else if (fingerIndex === 2) {
+    baseX = 0.42;
+    baseY = 1.02;
+    baseZ = 1.35;
+    phalanx1 = 2.65;
+    phalanx2 = 2.15;
+    phalanx3 = 1.65;
+    radiusBase = 0.79;
+  } else if (fingerIndex === 3) {
+    baseX = 1.68;
+    baseY = 1.0;
+    baseZ = 1.08;
+    phalanx1 = 2.52;
+    phalanx2 = 2.05;
+    phalanx3 = 1.58;
+    radiusBase = 0.74;
+  } else if (fingerIndex === 4) {
+    baseX = 3.0;
+    baseY = 0.64;
+    baseZ = 0.85;
+    phalanx1 = 2.25;
+    phalanx2 = 1.85;
+    phalanx3 = 1.4;
+    radiusBase = 0.68;
+  }
 
-  p.x = baseX + forwardX * along + Math.cos(ring) * radius;
-  p.y = baseY + forwardY * along + Math.sin(ring) * radius * 0.85;
-  p.z = baseZ + forwardZ * along + Math.sin(ring + t * 0.25 + local * 3) * radius * 1.25;
-  p.x += Math.sin(t * 1.15 + local * 12 + fingerIndex * 1.4) * 0.22;
-  p.y += Math.cos(t * 1.08 + local * 10 + fingerIndex * 1.2) * 0.2;
-  p.z += Math.sin(t * 0.9 + local * 13 + fingerIndex * 0.8) * 0.22;
+  const pitchBase = isThumb ? 0.42 : 0.55;
+  const pitchMid = pitchBase + curlEase * 0.8;
+  const pitchTip = pitchBase + 1.02 + curlEase * 1.18;
+  const yaw = isThumb ? -0.74 : 0;
+
+  const bone1 = {
+    x: Math.cos(yaw) * Math.cos(pitchBase),
+    y: Math.sin(pitchBase),
+    z: Math.sin(yaw) * Math.cos(pitchBase)
+  };
+  const bone2 = {
+    x: Math.cos(yaw) * Math.cos(pitchMid),
+    y: Math.sin(pitchMid),
+    z: Math.sin(yaw) * Math.cos(pitchMid)
+  };
+  const bone3 = {
+    x: Math.cos(yaw) * Math.cos(pitchTip),
+    y: Math.sin(pitchTip),
+    z: Math.sin(yaw) * Math.cos(pitchTip)
+  };
+
+  const fingerCore = {
+    x: bone1.x * (phalanx1 * segment1) + bone2.x * (phalanx2 * segment2) + bone3.x * (phalanx3 * segment3),
+    y: bone1.y * (phalanx1 * segment1) + bone2.y * (phalanx2 * segment2) + bone3.y * (phalanx3 * segment3),
+    z: bone1.z * (phalanx1 * segment1) + bone2.z * (phalanx2 * segment2) + bone3.z * (phalanx3 * segment3)
+  };
+
+  const ring = b * tau;
+  const radius = radiusBase * (1 - 0.58 * local);
+  const phalanxTaper = 0.58 + 0.42 * (1 - local);
+  p.x = baseX + fingerCore.x + Math.cos(ring) * radius * 0.75;
+  p.y = baseY + fingerCore.y + Math.sin(ring) * radius * 1.35 * phalanxTaper;
+  p.z = baseZ + fingerCore.z + Math.cos(ring + local * 2) * radius * 0.9 * phalanxTaper;
+  const detailNoise = 0.06 * Math.sin(t * 6.0 + a * 74 + b * 45);
+  p.x += detailNoise * Math.cos(ring);
+  p.y += detailNoise * Math.sin(ring * 1.8);
+  p.z += detailNoise * Math.cos(ring * 0.8);
+
   return p;
 };

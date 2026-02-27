@@ -15,6 +15,10 @@ test("wizard controls: transform cycles mode and mic can activate", async ({ pag
   await expect(page.getByTestId("mode-value")).toHaveText("PARTICLE HANDS");
   await page.getByTestId("transform-btn").click();
   await expect(page.getByTestId("mode-value")).toHaveText("SPHERICAL");
+  await modeSelect.selectOption({ label: "PARTICLE HANDS" });
+  await expect(page.getByTestId("mode-value")).toHaveText("PARTICLE HANDS");
+  await page.getByTestId("transform-btn").click();
+  await expect(page.getByTestId("mode-value")).toHaveText("SPHERICAL");
 
   const backgroundButton = page.getByTestId("background-btn");
   await expect(backgroundButton).toHaveAttribute("data-active", "true");

@@ -42,6 +42,21 @@ export const WIZARD_MODE_NAMES = [
 ] as const;
 const MODE_NAMES = WIZARD_MODE_NAMES;
 const PARTICLE_HANDS_MODE_INDEX = MODE_NAMES.length - 1;
+const PARTICLE_HANDS_PALM_SHARE = 0.46;
+const PARTICLE_HANDS_THUMB_START = PARTICLE_HANDS_PALM_SHARE;
+const PARTICLE_HANDS_THUMB_END = 0.56;
+const PARTICLE_HANDS_INDEX_END = 0.67;
+const PARTICLE_HANDS_MIDDLE_END = 0.78;
+const PARTICLE_HANDS_RING_END = 0.89;
+// Tune these constants for the high-level look of mode 10.
+const PARTICLE_HANDS_PALM_JITTER = 0.06;
+const PARTICLE_HANDS_PALM_RINGS = 0.48;
+const PARTICLE_HANDS_FINGER_TWIST = 0.6;
+const PARTICLE_HANDS_FINGER_NOISE = 0.06;
+const PARTICLE_HANDS_FLOAT_LIFT = 0.16;
+const PARTICLE_HANDS_FLOAT_ORBIT = 0.24;
+const PARTICLE_HANDS_FLOAT_NOISE = 0.06;
+const PARTICLE_HANDS_FLOAT_RADIAL = 0.22;
 
 export type VisualTuning = {
   bloomStrength: number;
@@ -919,39 +934,45 @@ export class ParticleWizardRuntime {
           p.x = xk + tube * cos(ring) * cos(u);
           p.y = yk + tube * cos(ring) * sin(u);
           p.z = zk + tube * sin(ring) * 1.3;
-        } else if (mode == 10) {
-          float palmShare = 0.46;
+        } else if (mode == ${PARTICLE_HANDS_MODE_INDEX}) {
+          float palmShare = ${PARTICLE_HANDS_PALM_SHARE};
           if (a < palmShare) {
-            float localPalm = a / palmShare;
-            float wristTaper = 1.0 - pow(localPalm, 1.8);
-            float thetaPalm = b * 6.28318;
-            float palmRadiusX = 3.6 + 1.7 * localPalm;
-            float palmRadiusY = 2.1 + 0.8 * localPalm;
-            p.x = cos(thetaPalm) * palmRadiusX + sin(t * 1.2 + localPalm * 8.0) * 0.35;
-            p.y = sin(thetaPalm) * palmRadiusY + (localPalm - 0.35) * 1.4;
-            p.z = (0.5 - localPalm) * 4.2 + cos(thetaPalm * 2.0 + t * 0.8) * 0.5;
+            float localPalm = clamp(a / palmShare, 0.0, 1.0);
+            float thetaPalm = b * 6.28318 + t * 0.38;
+            float palmWidth = mix(2.9, 4.15, pow(localPalm, 0.8));
+            float wristTaper = pow(1.0 - localPalm, 1.75);
+            float palmSignal = clamp(handFingerSignal, 0.0, 1.0);
+            float handLift = mix(-1.2, 1.35, localPalm);
+
+            p.x = cos(thetaPalm) * palmWidth;
+            p.y = sin(thetaPalm) * 1.05 * (0.78 + 0.22 * localPalm) + handLift;
+            p.z = (0.62 - localPalm) * 3.5 + cos(thetaPalm * 1.6 + t * 0.8) * ${PARTICLE_HANDS_PALM_RINGS};
             p.x *= 0.75 + wristTaper * 0.25;
-            p.y *= 0.9 + wristTaper * 0.1;
-            p.z *= 0.9 + wristTaper * 0.1;
+            p.y *= 1.12 - 0.12 * wristTaper;
+            p.z *= 0.7 + 0.25 * (1.0 - localPalm);
+            p.x += sin(thetaPalm * 2.0 + t * 0.9 + localPalm * 4.0) * (0.07 + palmSignal * 0.06);
+            p.y += cos(thetaPalm * 2.1 + t * 1.1) * (0.05 + palmSignal * 0.04);
+            p.z += sin(t * 1.2 + localPalm * 9.0) * 0.06;
           } else {
             float fingerIndex = 0.0;
-            float segStart = 0.46;
-            float segEnd = 0.56;
-            if (a >= 0.56 && a < 0.67) {
+            float segStart = ${PARTICLE_HANDS_THUMB_START};
+            float segEnd = ${PARTICLE_HANDS_THUMB_END};
+
+            if (a >= ${PARTICLE_HANDS_THUMB_END} && a < ${PARTICLE_HANDS_INDEX_END}) {
               fingerIndex = 1.0;
-              segStart = 0.56;
-              segEnd = 0.67;
-            } else if (a >= 0.67 && a < 0.78) {
+              segStart = ${PARTICLE_HANDS_THUMB_END};
+              segEnd = ${PARTICLE_HANDS_INDEX_END};
+            } else if (a >= ${PARTICLE_HANDS_INDEX_END} && a < ${PARTICLE_HANDS_MIDDLE_END}) {
               fingerIndex = 2.0;
-              segStart = 0.67;
-              segEnd = 0.78;
-            } else if (a >= 0.78 && a < 0.89) {
+              segStart = ${PARTICLE_HANDS_INDEX_END};
+              segEnd = ${PARTICLE_HANDS_MIDDLE_END};
+            } else if (a >= ${PARTICLE_HANDS_MIDDLE_END} && a < ${PARTICLE_HANDS_RING_END}) {
               fingerIndex = 3.0;
-              segStart = 0.78;
-              segEnd = 0.89;
-            } else if (a >= 0.89) {
+              segStart = ${PARTICLE_HANDS_MIDDLE_END};
+              segEnd = ${PARTICLE_HANDS_RING_END};
+            } else if (a >= ${PARTICLE_HANDS_RING_END}) {
               fingerIndex = 4.0;
-              segStart = 0.89;
+              segStart = ${PARTICLE_HANDS_RING_END};
               segEnd = 1.0;
             }
 
@@ -967,53 +988,87 @@ export class ParticleWizardRuntime {
               fingerCurl = handFingerCurlB;
             }
 
-            float baseX = -3.3;
-            float baseY = -0.55;
-            float baseZ = 0.2;
-            float length = 5.0;
-            float radiusBase = 0.95;
+            float baseX = -3.15;
+            float baseY = -0.38;
+            float baseZ = 0.72;
+            float phalanx1 = 2.05;
+            float phalanx2 = 1.85;
+            float phalanx3 = 1.35;
+            float radiusBase = 0.88;
             if (fingerIndex > 0.5 && fingerIndex < 1.5) {
               baseX = -1.25;
-              baseY = 0.95;
-              baseZ = 1.1;
-              length = 6.4;
-              radiusBase = 0.72;
+              baseY = 0.84;
+              baseZ = 1.15;
+              phalanx1 = 2.45;
+              phalanx2 = 2.0;
+              phalanx3 = 1.45;
+              radiusBase = 0.76;
             } else if (fingerIndex > 1.5 && fingerIndex < 2.5) {
-              baseX = 0.35;
-              baseY = 1.25;
+              baseX = 0.42;
+              baseY = 1.02;
               baseZ = 1.35;
-              length = 7.0;
-              radiusBase = 0.75;
+              phalanx1 = 2.65;
+              phalanx2 = 2.15;
+              phalanx3 = 1.65;
+              radiusBase = 0.79;
             } else if (fingerIndex > 2.5 && fingerIndex < 3.5) {
-              baseX = 1.75;
-              baseY = 1.05;
-              baseZ = 1.05;
-              length = 6.5;
-              radiusBase = 0.7;
+              baseX = 1.68;
+              baseY = 1.0;
+              baseZ = 1.08;
+              phalanx1 = 2.52;
+              phalanx2 = 2.05;
+              phalanx3 = 1.58;
+              radiusBase = 0.74;
             } else if (fingerIndex > 3.5) {
-              baseX = 3.05;
-              baseY = 0.7;
-              baseZ = 0.75;
-              length = 5.6;
-              radiusBase = 0.64;
+              baseX = 3.0;
+              baseY = 0.64;
+              baseZ = 0.85;
+              phalanx1 = 2.25;
+              phalanx2 = 1.85;
+              phalanx3 = 1.4;
+              radiusBase = 0.68;
             }
 
-            float ringFinger = b * 6.28318;
-            float radiusFinger = radiusBase * (1.0 - 0.55 * localFinger);
-            float bend = clamp(fingerCurl, 0.0, 1.0) * (0.45 + localFinger * localFinger * 1.35);
-            float along = localFinger * length;
+            float segment1 = clamp(localFinger * 3.0, 0.0, 1.0);
+            float segment2 = clamp((localFinger - 0.333) * 1.8, 0.0, 1.0);
+            float segment3 = clamp((localFinger - 0.666) * 3.0, 0.0, 1.0);
+            float curl = clamp(fingerCurl, 0.0, 1.0);
+            float curlEase = sqrt(curl);
+            float fingerYaw = fingerIndex < 0.5 ? -0.74 : 0.0;
+            float phalanxPitchBase = (fingerIndex < 0.5) ? 0.42 : 0.55;
+            float phalanxPitchMid = phalanxPitchBase + curlEase * 0.8;
+            float phalanxPitchTip = phalanxPitchBase + 1.02 + curlEase * 1.18;
 
-            float thumbYaw = fingerIndex < 0.5 ? -0.68 : 0.0;
-            float forwardX = cos(thumbYaw) * cos(bend);
-            float forwardY = sin(bend) * (fingerIndex < 0.5 ? 0.75 : 1.0);
-            float forwardZ = sin(thumbYaw) * cos(bend);
+            vec3 bone1 = vec3(
+              cos(fingerYaw) * cos(phalanxPitchBase),
+              sin(phalanxPitchBase),
+              sin(fingerYaw) * cos(phalanxPitchBase)
+            );
+            vec3 bone2 = vec3(
+              cos(fingerYaw) * cos(phalanxPitchMid),
+              sin(phalanxPitchMid),
+              sin(fingerYaw) * cos(phalanxPitchMid)
+            );
+            vec3 bone3 = vec3(
+              cos(fingerYaw) * cos(phalanxPitchTip),
+              sin(phalanxPitchTip),
+              sin(fingerYaw) * cos(phalanxPitchTip)
+            );
+            vec3 fingerCore = bone1 * (phalanx1 * segment1) + bone2 * (phalanx2 * segment2) + bone3 * (phalanx3 * segment3);
 
-            p.x = baseX + forwardX * along + cos(ringFinger) * radiusFinger;
-            p.y = baseY + forwardY * along + sin(ringFinger) * radiusFinger * 0.85;
-            p.z = baseZ + forwardZ * along + sin(ringFinger + t * 0.25 + localFinger * 3.0) * radiusFinger * 1.25;
-            p.x += sin(t * 1.15 + localFinger * 12.0 + fingerIndex * 1.4) * 0.22;
-            p.y += cos(t * 1.08 + localFinger * 10.0 + fingerIndex * 1.2) * 0.2;
-            p.z += sin(t * 0.9 + localFinger * 13.0 + fingerIndex * 0.8) * 0.22;
+            float ring = b * 6.28318 + localFinger * 7.0 + curl * ${PARTICLE_HANDS_FINGER_TWIST};
+            float radius = radiusBase * (1.0 - 0.58 * localFinger);
+            float phalanxTaper = 0.58 + 0.42 * (1.0 - localFinger);
+            p.x = baseX + fingerCore.x + cos(ring) * radius * 0.75;
+            p.y = baseY + fingerCore.y + sin(ring) * radius * 1.35 * phalanxTaper;
+            p.z = baseZ + fingerCore.z + cos(ring + localFinger * 2.0) * radius * 0.9 * phalanxTaper;
+
+            float detailNoise = ${PARTICLE_HANDS_FINGER_NOISE} * sin(t * 6.0 + a * 74.0 + b * 45.0);
+            p += vec3(
+              detailNoise * cos(ring),
+              detailNoise * sin(ring * 1.8),
+              detailNoise * cos(ring * 0.8)
+            );
           }
         }
         return p;
@@ -1043,7 +1098,9 @@ export class ParticleWizardRuntime {
           return;
         }
 
-        float handsModeMix = (currentMode == 10 || targetMode == 10) ? 1.0 : 0.0;
+        float handsModeMix = (currentMode == ${PARTICLE_HANDS_MODE_INDEX} || targetMode == ${PARTICLE_HANDS_MODE_INDEX})
+          ? 1.0
+          : 0.0;
         float presence = clamp(handPresence, 0.0, 1.0);
         float motionPresence = mix(1.0, presence, handsModeMix);
         vAlphaGain = mix(1.0, 0.22 + 0.78 * presence, handsModeMix);
@@ -1054,7 +1111,22 @@ export class ParticleWizardRuntime {
 
         float normalizedFingerSignal = clamp(handFingerSignal, 0.0, 1.0);
         float sideScale = handScale * (1.0 + normalizedFingerSignal * 0.35);
-        pos = pos * (1.0 + sideScale * 0.45 * motionPresence) + handOffset * 3.5 * motionPresence;
+        float shapeScale = mix(1.0 + sideScale * 0.45 * motionPresence, 1.0 + sideScale * 0.24 * motionPresence, handsModeMix);
+        pos = pos * shapeScale;
+        pos += handOffset * mix(3.5, 2.9, handsModeMix) * motionPresence;
+
+        float floatPhase = time * 0.9 + p1 * 12.0 + p2 * 6.0 + rightSide * 0.45;
+        float floatLift = sin(floatPhase) * (${PARTICLE_HANDS_FLOAT_LIFT} + 0.12 * clamp(handScale, -1.0, 1.0) + ${PARTICLE_HANDS_PALM_JITTER} * normalizedFingerSignal);
+        float floatOrbit = cos(floatPhase * 0.8) * (${PARTICLE_HANDS_FLOAT_ORBIT} + 0.08 * normalizedFingerSignal);
+        float floatNoise = ${PARTICLE_HANDS_FLOAT_NOISE} * cos(floatPhase * 1.1 + p2 * 8.0);
+        float radialPulse = (normalizedFingerSignal - 0.5) * (${PARTICLE_HANDS_FLOAT_RADIAL} + 0.14 * clamp(handScale, -1.0, 1.0));
+        vec2 floatDir = pos.xz + vec2(0.001, 0.001);
+        float floatRadius = max(0.0001, length(floatDir));
+        pos.x += floatLift * 0.6 * handsModeMix * motionPresence;
+        pos.y += floatOrbit * 0.35 * handsModeMix * motionPresence;
+        pos.z += floatNoise * 0.42 * handsModeMix * motionPresence;
+        pos.x += (floatDir.x / floatRadius) * radialPulse * 0.7 * handsModeMix * motionPresence;
+        pos.z += (floatDir.y / floatRadius) * radialPulse * 0.7 * handsModeMix * motionPresence;
         pos += normalize(pos + vec3(0.001)) * bassPump * (1.8 * mix(1.0, 0.4 + 0.6 * presence, handsModeMix));
         vec4 mvPos = modelViewMatrix * vec4(pos, 1.0);
         float sizeRaw = 4.2 * (420.0 / -mvPos.z) * (1.0 + bassPump * 2.5 + 0.4 * sin(time * 6.0 + p1 * 30.0));
