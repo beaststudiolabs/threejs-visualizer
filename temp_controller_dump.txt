@@ -1,7 +1,6 @@
-import {
+﻿import {
   evaluateDualPalmTargets,
-  mapLeftHandPose,
-  mapRightHandPose,
+  mapHandPose,
   mapSingleHandPose,
   resolvePalmAssignment,
   shouldActivateCalibration,
@@ -40,14 +39,6 @@ export type HandDebugInfo = {
   calibrationTimerMs: number;
   mappedOffset: Vec3;
   mappedScale: number;
-  mappedOffsetLeft: Vec3;
-  mappedScaleLeft: number;
-  mappedOffsetRight: Vec3;
-  mappedScaleRight: number;
-  mappedFingerLeft: number;
-  mappedFingerRight: number;
-  sharedRatio?: number;
-  sharedBudget?: number;
   staleMs: number;
 };
 
@@ -95,12 +86,6 @@ const DEFAULT_DEBUG_INFO: HandDebugInfo = {
   calibrationTimerMs: 0,
   mappedOffset: { x: 0, y: 0, z: 0 },
   mappedScale: 0,
-  mappedOffsetLeft: { x: 0, y: 0, z: 0 },
-  mappedScaleLeft: 0,
-  mappedOffsetRight: { x: 0, y: 0, z: 0 },
-  mappedScaleRight: 0,
-  mappedFingerLeft: 0,
-  mappedFingerRight: 0,
   staleMs: 0
 };
 
@@ -128,12 +113,6 @@ export class HandWizardController {
   private neutralSingle: Vec3 = { x: 0, y: 0, z: 0 };
   private handOffset: Vec3 = { x: 0, y: 0, z: 0 };
   private handScale = 0;
-  private leftHandOffset: Vec3 = { x: 0, y: 0, z: 0 };
-  private leftHandScale = 0;
-  private leftFingerSignal = 0;
-  private rightHandOffset: Vec3 = { x: 0, y: 0, z: 0 };
-  private rightHandScale = 0;
-  private rightFingerSignal = 0;
 
   private uiState: HandWizardUiState = {
     webcamVisible: true,
@@ -252,37 +231,13 @@ export class HandWizardController {
         z: Math.sin(time * 0.7) * 1.7
       };
       const targetScale = 1.3 + Math.sin(time * 1.1) * 0.2;
-      const leftSmooth = smoothHandState(this.leftHandOffset, this.leftHandScale, targetOffset, targetScale, 0.22);
-      const rightSmooth = smoothHandState(this.rightHandOffset, this.rightHandScale, {
-        x: -targetOffset.x,
-        y: targetOffset.y,
-        z: targetOffset.z
-      }, targetScale, 0.22);
-
-      this.leftHandOffset = leftSmooth.offset;
-      this.leftHandScale = leftSmooth.scale;
-      this.rightHandOffset = rightSmooth.offset;
-      this.rightHandScale = rightSmooth.scale;
-
-      this.handOffset = {
-        x: (leftSmooth.offset.x + rightSmooth.offset.x) / 2,
-        y: (leftSmooth.offset.y + rightSmooth.offset.y) / 2,
-        z: (leftSmooth.offset.z + rightSmooth.offset.z) / 2
-      };
-      this.handScale = (leftSmooth.scale + rightSmooth.scale) / 2;
-      this.leftFingerSignal = 0.25 + 0.15 * Math.sin(time * 1.3);
-      this.rightFingerSignal = this.leftFingerSignal;
-
+      const smooth = smoothHandState(this.handOffset, this.handScale, targetOffset, targetScale, 0.22);
+      this.handOffset = smooth.offset;
+      this.handScale = smooth.scale;
       this.uiState.debug = {
         ...this.uiState.debug,
         mappedOffset: { ...this.handOffset },
         mappedScale: this.handScale,
-        mappedOffsetLeft: { ...this.leftHandOffset },
-        mappedScaleLeft: this.leftHandScale,
-        mappedOffsetRight: { ...this.rightHandOffset },
-        mappedScaleRight: this.rightHandScale,
-        mappedFingerLeft: this.leftFingerSignal,
-        mappedFingerRight: this.rightFingerSignal,
         staleMs: 0
       };
       return;
@@ -296,30 +251,11 @@ export class HandWizardController {
     this.uiState.debug.staleMs = staleMs;
 
     if (staleMs > 450) {
-      const leftSmooth = smoothHandState(this.leftHandOffset, this.leftHandScale, { x: 0, y: 0, z: 0 }, 0, 0.08);
-      const rightSmooth = smoothHandState(this.rightHandOffset, this.rightHandScale, { x: 0, y: 0, z: 0 }, 0, 0.08);
-
-      this.leftHandOffset = leftSmooth.offset;
-      this.leftHandScale = leftSmooth.scale;
-      this.rightHandOffset = rightSmooth.offset;
-      this.rightHandScale = rightSmooth.scale;
-      this.leftFingerSignal = 0;
-      this.rightFingerSignal = 0;
-
-      this.handOffset = {
-        x: (leftSmooth.offset.x + rightSmooth.offset.x) / 2,
-        y: (leftSmooth.offset.y + rightSmooth.offset.y) / 2,
-        z: (leftSmooth.offset.z + rightSmooth.offset.z) / 2
-      };
-      this.handScale = (leftSmooth.scale + rightSmooth.scale) / 2;
+      const smooth = smoothHandState(this.handOffset, this.handScale, { x: 0, y: 0, z: 0 }, 0, 0.08);
+      this.handOffset = smooth.offset;
+      this.handScale = smooth.scale;
       this.uiState.debug.mappedOffset = { ...this.handOffset };
       this.uiState.debug.mappedScale = this.handScale;
-      this.uiState.debug.mappedOffsetLeft = { ...this.leftHandOffset };
-      this.uiState.debug.mappedScaleLeft = this.leftHandScale;
-      this.uiState.debug.mappedOffsetRight = { ...this.rightHandOffset };
-      this.uiState.debug.mappedScaleRight = this.rightHandScale;
-      this.uiState.debug.mappedFingerLeft = this.leftFingerSignal;
-      this.uiState.debug.mappedFingerRight = this.rightFingerSignal;
       this.uiState.debug.inCenter = false;
       this.uiState.debug.leftTargetReady = false;
       this.uiState.debug.rightTargetReady = false;
@@ -359,30 +295,6 @@ export class HandWizardController {
     return this.handScale;
   }
 
-  getLeftOffset(): Vec3 {
-    return this.leftHandOffset;
-  }
-
-  getLeftScale(): number {
-    return this.leftHandScale;
-  }
-
-  getLeftFingerSignal(): number {
-    return this.leftFingerSignal;
-  }
-
-  getRightOffset(): Vec3 {
-    return this.rightHandOffset;
-  }
-
-  getRightScale(): number {
-    return this.rightHandScale;
-  }
-
-  getRightFingerSignal(): number {
-    return this.rightFingerSignal;
-  }
-
   getUiState(): HandWizardUiState {
     return this.uiState;
   }
@@ -396,12 +308,6 @@ export class HandWizardController {
     this.singleStableMs = 0;
     this.handOffset = { x: 0, y: 0, z: 0 };
     this.handScale = 0;
-    this.leftHandOffset = { x: 0, y: 0, z: 0 };
-    this.leftHandScale = 0;
-    this.leftFingerSignal = 0;
-    this.rightHandOffset = { x: 0, y: 0, z: 0 };
-    this.rightHandScale = 0;
-    this.rightFingerSignal = 0;
     this.uiState.overlayOpacity = OVERLAY_READY_OPACITY;
     this.uiState.wizardActive = false;
     this.uiState.handMode = "none";
@@ -419,13 +325,7 @@ export class HandWizardController {
       rightTargetReady: false,
       calibrationTimerMs: 0,
       mappedOffset: { x: 0, y: 0, z: 0 },
-      mappedScale: 0,
-      mappedOffsetLeft: { x: 0, y: 0, z: 0 },
-      mappedScaleLeft: 0,
-      mappedOffsetRight: { x: 0, y: 0, z: 0 },
-      mappedScaleRight: 0,
-      mappedFingerLeft: 0,
-      mappedFingerRight: 0
+      mappedScale: 0
     };
     this.emitState();
   }
@@ -447,12 +347,6 @@ export class HandWizardController {
     this.singleStableMs = 0;
     this.handOffset = { x: 0, y: 0, z: 0 };
     this.handScale = 0;
-    this.leftHandOffset = { x: 0, y: 0, z: 0 };
-    this.leftHandScale = 0;
-    this.leftFingerSignal = 0;
-    this.rightHandOffset = { x: 0, y: 0, z: 0 };
-    this.rightHandScale = 0;
-    this.rightFingerSignal = 0;
   }
 
   private cloneLandmarks(landmarks: LegacyLandmark[] | undefined): Vec3[] | undefined {
@@ -480,14 +374,7 @@ export class HandWizardController {
         centerY: 0.5,
         inCenter: false,
         leftTargetReady: false,
-        rightTargetReady: false,
-        mappedOffsetLeft: { x: 0, y: 0, z: 0 },
-        mappedScaleLeft: 0,
-        mappedOffsetRight: { x: 0, y: 0, z: 0 },
-        mappedScaleRight: 0,
-        mappedFingerLeft: 0,
-        mappedFingerRight: 0,
-        sharedRatio: this.uiState.debug.sharedRatio
+        rightTargetReady: false
       };
       this.emitState();
       return;
@@ -506,21 +393,7 @@ export class HandWizardController {
         y: palm.y,
         z: palm.z,
         label: results.multiHandedness?.[i]?.label,
-        landmarks: this.cloneLandmarks(handLandmarks),
-        thumbTip: handLandmarks[4]
-          ? {
-              x: handLandmarks[4].x,
-              y: handLandmarks[4].y,
-              z: handLandmarks[4].z
-            }
-          : undefined,
-        indexTip: handLandmarks[8]
-          ? {
-              x: handLandmarks[8].x,
-              y: handLandmarks[8].y,
-              z: handLandmarks[8].z
-            }
-          : undefined
+        landmarks: this.cloneLandmarks(handLandmarks)
       });
     }
 
@@ -546,13 +419,7 @@ export class HandWizardController {
         inCenter: false,
         leftTargetReady: false,
         rightTargetReady: false,
-        calibrationTimerMs: 0,
-        mappedOffsetLeft: { x: 0, y: 0, z: 0 },
-        mappedScaleLeft: 0,
-        mappedOffsetRight: { x: 0, y: 0, z: 0 },
-        mappedScaleRight: 0,
-        mappedFingerLeft: 0,
-        mappedFingerRight: 0
+        calibrationTimerMs: 0
       };
       this.emitState();
       return;
@@ -603,20 +470,9 @@ export class HandWizardController {
       }
 
       const mapped = mapSingleHandPose(single, this.neutralSingle);
-      const leftSmooth = smoothHandState(this.leftHandOffset, this.leftHandScale, mapped.offset, mapped.spread, 0.22);
-      const rightSmooth = smoothHandState(this.rightHandOffset, this.rightHandScale, mapped.offset, mapped.spread, 0.22);
-      this.leftHandOffset = leftSmooth.offset;
-      this.leftHandScale = leftSmooth.scale;
-      this.rightHandOffset = rightSmooth.offset;
-      this.rightHandScale = rightSmooth.scale;
-      this.leftFingerSignal = mapped.fingerSignal;
-      this.rightFingerSignal = mapped.fingerSignal;
-      this.handOffset = {
-        x: (leftSmooth.offset.x + rightSmooth.offset.x) / 2,
-        y: (leftSmooth.offset.y + rightSmooth.offset.y) / 2,
-        z: (leftSmooth.offset.z + rightSmooth.offset.z) / 2
-      };
-      this.handScale = (leftSmooth.scale + rightSmooth.scale) / 2;
+      const smooth = smoothHandState(this.handOffset, this.handScale, mapped.offset, mapped.spread, 0.22);
+      this.handOffset = smooth.offset;
+      this.handScale = smooth.scale;
 
       this.uiState.handMode = "single";
       this.uiState.handTrackingState = "active";
@@ -627,13 +483,7 @@ export class HandWizardController {
       this.uiState.debug = {
         ...this.uiState.debug,
         mappedOffset: { ...this.handOffset },
-        mappedScale: this.handScale,
-        mappedOffsetLeft: { ...this.leftHandOffset },
-        mappedScaleLeft: this.leftHandScale,
-        mappedOffsetRight: { ...this.rightHandOffset },
-        mappedScaleRight: this.rightHandScale,
-        mappedFingerLeft: this.leftFingerSignal,
-        mappedFingerRight: this.rightFingerSignal
+        mappedScale: this.handScale
       };
       this.emitState();
       return;
@@ -693,24 +543,10 @@ export class HandWizardController {
       return;
     }
 
-    const mappedLeft = mapLeftHandPose(leftPalm, this.neutralLeft);
-    const mappedRight = mapRightHandPose(rightPalm, this.neutralRight);
-
-    const leftSmooth = smoothHandState(this.leftHandOffset, this.leftHandScale, mappedLeft.offset, mappedLeft.spread, 0.22);
-    const rightSmooth = smoothHandState(this.rightHandOffset, this.rightHandScale, mappedRight.offset, mappedRight.spread, 0.22);
-
-    this.leftHandOffset = leftSmooth.offset;
-    this.leftHandScale = leftSmooth.scale;
-    this.rightHandOffset = rightSmooth.offset;
-    this.rightHandScale = rightSmooth.scale;
-    this.leftFingerSignal = mappedLeft.fingerSignal;
-    this.rightFingerSignal = mappedRight.fingerSignal;
-    this.handOffset = {
-      x: (leftSmooth.offset.x + rightSmooth.offset.x) / 2,
-      y: (leftSmooth.offset.y + rightSmooth.offset.y) / 2,
-      z: (leftSmooth.offset.z + rightSmooth.offset.z) / 2
-    };
-    this.handScale = (leftSmooth.scale + rightSmooth.scale) / 2;
+    const mapped = mapHandPose(leftPalm, rightPalm, this.neutralLeft, this.neutralRight);
+    const smooth = smoothHandState(this.handOffset, this.handScale, mapped.offset, mapped.spread, 0.22);
+    this.handOffset = smooth.offset;
+    this.handScale = smooth.scale;
 
     this.uiState.handMode = "dual";
     this.uiState.handTrackingState = "active";
@@ -746,13 +582,7 @@ export class HandWizardController {
     this.uiState.debug = {
       ...this.uiState.debug,
       mappedOffset: { ...this.handOffset },
-      mappedScale: this.handScale,
-      mappedOffsetLeft: { ...this.leftHandOffset },
-      mappedScaleLeft: this.leftHandScale,
-      mappedOffsetRight: { ...this.rightHandOffset },
-      mappedScaleRight: this.rightHandScale,
-      mappedFingerLeft: this.leftFingerSignal,
-      mappedFingerRight: this.rightFingerSignal
+      mappedScale: this.handScale
     };
     this.emitState();
   }
@@ -775,3 +605,5 @@ export class HandWizardController {
     this.onStateChange?.(this.uiState);
   }
 }
+
+

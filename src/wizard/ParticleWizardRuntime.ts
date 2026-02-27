@@ -1,4 +1,4 @@
-﻿import * as THREE from "three";
+import * as THREE from "three";
 import { AfterimagePass } from "three/examples/jsm/postprocessing/AfterimagePass.js";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
@@ -11,11 +11,35 @@ import {
   type HandTrackingState,
   type HandWizardUiState
 } from "./HandWizardController";
-import { clamp } from "./math";
+import { clamp, computeSharedRatio } from "./math";
 import { MicAnalyzer, type MicStatus } from "./MicAnalyzer";
 
-const PARTICLE_COUNT = 20_000;
-const MODE_NAMES = ["SPHERICAL", "MOBIUS", "TOROIDAL", "LISSAJOUS", "FRACTAL"] as const;
+export const FPS_CAP_MIN = 60;
+export const FPS_CAP_MAX = 240;
+export const FPS_CAP_DEFAULT = 60;
+export const PARTICLE_COUNT_MIN = 1_000;
+export const PARTICLE_COUNT_MAX = 100_000;
+export const PARTICLE_COUNT_DEFAULT = 20_000;
+
+const DPR_CAP = 1.35;
+const LOW_PERFORMANCE_PARTICLE_FLOOR = 10_000;
+const AUTO_LOW_FPS_THRESHOLD = 38;
+const AUTO_HIGH_FPS_THRESHOLD = 55;
+const MORPH_DURATION_SEC = 1.25;
+
+export const WIZARD_MODE_NAMES = [
+  "SPHERICAL",
+  "MOBIUS",
+  "TOROIDAL",
+  "LISSAJOUS",
+  "FRACTAL",
+  "KLEIN",
+  "HELIX",
+  "GYROID",
+  "SUPERFORMULA",
+  "WAVE KNOT"
+] as const;
+const MODE_NAMES = WIZARD_MODE_NAMES;
 
 export type VisualTuning = {
   bloomStrength: number;
@@ -45,15 +69,25 @@ export const DEFAULT_PALETTE: PaletteConfig = {
   presetId: "neon-cyan"
 };
 
+export type PerformanceMode = "auto" | "high" | "low";
+
 const DEFAULT_HAND_DEBUG: HandDebugInfo = {
   palmCount: 0,
   palms: [],
   centerX: 0.5,
   centerY: 0.5,
   inCenter: false,
+  leftTargetReady: false,
+  rightTargetReady: false,
   calibrationTimerMs: 0,
   mappedOffset: { x: 0, y: 0, z: 0 },
   mappedScale: 0,
+  mappedOffsetLeft: { x: 0, y: 0, z: 0 },
+  mappedScaleLeft: 0,
+  mappedOffsetRight: { x: 0, y: 0, z: 0 },
+  mappedScaleRight: 0,
+  mappedFingerLeft: 0,
+  mappedFingerRight: 0,
   staleMs: 0
 };
 
@@ -61,7 +95,7 @@ const DEFAULT_HAND_UI_STATE: HandWizardUiState = {
   webcamVisible: true,
   overlayOpacity: 0.35,
   wizardActive: false,
-  statusText: "Align both palms in center to calibrate wizard.",
+  statusText: "Align both palms with the outlines to calibrate wizard.",
   statusColor: "#00ffff",
   handMode: "none",
   handTrackingState: "loading",
@@ -70,8 +104,10 @@ const DEFAULT_HAND_UI_STATE: HandWizardUiState = {
 
 export type WizardHudState = {
   particleCount: number;
+  targetFps: number;
   fps: number;
   modeName: string;
+  modeNames: readonly string[];
   title: string;
   trailsText: string;
   trailsActive: boolean;
@@ -84,26 +120,45 @@ export type WizardHudState = {
   micButtonText: string;
   micButtonColor: string;
   micStatus: MicStatus;
+  micSensitivity: number;
+  micLevel: number;
   handMode: HandMode;
   handTrackingState: HandTrackingState;
   handDebug: HandDebugInfo;
+  cameraDebug: {
+    azimuth: number;
+    polar: number;
+    distance: number;
+    targetAzimuth: number;
+    targetPolar: number;
+    targetDistance: number;
+    response: number;
+  };
   visualTuning: VisualTuning;
   palette: PaletteConfig;
 };
 
-type ParticleUniforms = {
+type ParticleSideUniforms = {
   time: { value: number };
   currentMode: { value: number };
   targetMode: { value: number };
   morph: { value: number };
   handOffset: { value: THREE.Vector3 };
   handScale: { value: number };
+  handFingerSignal: { value: number };
+  modelSeparation: { value: number };
+  sharedRatio: { value: number };
+  isRight: { value: number };
   bassPump: { value: number };
   colorPrimary: { value: THREE.Vector3 };
   colorSecondary: { value: THREE.Vector3 };
   colorAccent: { value: THREE.Vector3 };
   particleGain: { value: number };
 };
+
+const MODEL_SEPARATION = 10;
+const SHARED_NEAR_DISTANCE = 7;
+const SHARED_FAR_DISTANCE = 28;
 
 export type ParticleWizardRuntimeConfig = {
   canvas: HTMLCanvasElement;
@@ -128,10 +183,12 @@ const toColorVector = (hex: string): THREE.Vector3 => {
 };
 
 export const createInitialHudState = (): WizardHudState => ({
-  particleCount: PARTICLE_COUNT,
-  fps: 60,
+  particleCount: PARTICLE_COUNT_DEFAULT,
+  targetFps: FPS_CAP_DEFAULT,
+  fps: FPS_CAP_DEFAULT,
   modeName: MODE_NAMES[0],
-  title: `${MODE_NAMES[0]} WIZARD`,
+  modeNames: MODE_NAMES,
+  title: "PARTICLE WIZARD",
   trailsText: "ACTIVE",
   trailsActive: true,
   flowActive: true,
@@ -140,12 +197,23 @@ export const createInitialHudState = (): WizardHudState => ({
   statusColor: DEFAULT_HAND_UI_STATE.statusColor,
   webcamVisible: true,
   calibrationOpacity: 0.35,
-  micButtonText: "MIC ON",
+  micButtonText: "MIC OFF",
   micButtonColor: "#00ffff",
   micStatus: "idle",
+  micSensitivity: 1.6,
+  micLevel: 0,
   handMode: "none",
   handTrackingState: "loading",
   handDebug: { ...DEFAULT_HAND_DEBUG },
+  cameraDebug: {
+    azimuth: 0.6,
+    polar: 1.28,
+    distance: 42,
+    targetAzimuth: 0.6,
+    targetPolar: 1.28,
+    targetDistance: 42,
+    response: 0.15
+  },
   visualTuning: { ...DEFAULT_VISUAL_TUNING },
   palette: { ...DEFAULT_PALETTE }
 });
@@ -161,13 +229,16 @@ export class ParticleWizardRuntime {
   private composer?: EffectComposer;
   private bloomPass?: UnrealBloomPass;
   private afterimagePass?: AfterimagePass;
-  private particles?: THREE.Points;
+  private leftParticles?: THREE.Points;
+  private rightParticles?: THREE.Points;
   private stars?: THREE.Points;
   private particleGeometry?: THREE.BufferGeometry;
   private starGeometry?: THREE.BufferGeometry;
-  private particleMaterial?: THREE.ShaderMaterial;
+  private leftParticleMaterial?: THREE.ShaderMaterial;
+  private rightParticleMaterial?: THREE.ShaderMaterial;
 
-  private uniforms?: ParticleUniforms;
+  private leftParticleUniforms?: ParticleSideUniforms;
+  private rightParticleUniforms?: ParticleSideUniforms;
   private frameRequestId?: number;
   private running = false;
   private initialized = false;
@@ -182,9 +253,12 @@ export class ParticleWizardRuntime {
   private targetMode = 0;
   private flowActive = true;
   private trailsActive = true;
-  private fps = 60;
+  private particleCount = PARTICLE_COUNT_DEFAULT;
+  private targetFps = FPS_CAP_DEFAULT;
+  private fps = FPS_CAP_DEFAULT;
   private fpsFrameCount = 0;
   private fpsSampleStart = performance.now();
+  private lastRenderTime = 0;
 
   private curAz = 0.6;
   private curPol = 1.28;
@@ -192,9 +266,15 @@ export class ParticleWizardRuntime {
   private targetAz = 0.6;
   private targetPol = 1.28;
   private targetDist = 42;
+  private cameraResponse = 0.15;
+  private performanceMode: PerformanceMode = "auto";
+  private autoPerformancePreset: "low" | "high" = "high";
   private isDragging = false;
   private lastPointerX = 0;
   private lastPointerY = 0;
+  private particleRebuildTimer?: number;
+  private micLevel = 0;
+  private gestureConfigNoopWarned = false;
 
   private statusOverride?: StatusOverride;
   private lastHudEmitTime = 0;
@@ -224,6 +304,10 @@ export class ParticleWizardRuntime {
 
     this.running = true;
     this.clock.start();
+    this.fpsFrameCount = 0;
+    this.fpsSampleStart = performance.now();
+    this.lastRenderTime = 0;
+    this.applyPerformancePreset();
     void this.handController.init();
     this.frameRequestId = window.requestAnimationFrame(this.tick);
   }
@@ -242,14 +326,34 @@ export class ParticleWizardRuntime {
   }
 
   cycleTransform(): void {
-    if (!this.uniforms) {
+    if (!this.leftParticleUniforms || !this.rightParticleUniforms) {
       return;
     }
     this.morphProgress = 0;
     this.currentMode = this.targetMode;
     this.targetMode = (this.targetMode + 1) % MODE_NAMES.length;
-    this.uniforms.currentMode.value = this.currentMode;
-    this.uniforms.targetMode.value = this.targetMode;
+    this.leftParticleUniforms.currentMode.value = this.currentMode;
+    this.leftParticleUniforms.targetMode.value = this.targetMode;
+    this.rightParticleUniforms.currentMode.value = this.currentMode;
+    this.rightParticleUniforms.targetMode.value = this.targetMode;
+    this.emitHud(true);
+  }
+
+  setMode(index: number): void {
+    if (!this.leftParticleUniforms || !this.rightParticleUniforms) {
+      return;
+    }
+    const safeIndex = ((Math.round(index) % MODE_NAMES.length) + MODE_NAMES.length) % MODE_NAMES.length;
+    if (safeIndex === this.targetMode) {
+      return;
+    }
+    this.morphProgress = 0;
+    this.currentMode = this.targetMode;
+    this.targetMode = safeIndex;
+    this.leftParticleUniforms.currentMode.value = this.currentMode;
+    this.leftParticleUniforms.targetMode.value = this.targetMode;
+    this.rightParticleUniforms.currentMode.value = this.currentMode;
+    this.rightParticleUniforms.targetMode.value = this.targetMode;
     this.emitHud(true);
   }
 
@@ -266,6 +370,90 @@ export class ParticleWizardRuntime {
     this.emitHud(true);
   }
 
+  setTargetFps(next: number): void {
+    this.targetFps = clamp(Math.round(next), FPS_CAP_MIN, FPS_CAP_MAX);
+    this.emitHud(true);
+  }
+
+  setParticleCount(next: number): void {
+    const floor = this.getEffectivePerformanceMode() === "low" ? LOW_PERFORMANCE_PARTICLE_FLOOR : PARTICLE_COUNT_MIN;
+    const safeCount = clamp(Math.floor(next), floor, PARTICLE_COUNT_MAX);
+    if (safeCount === this.particleCount) {
+      return;
+    }
+
+    this.particleCount = safeCount;
+    this.scheduleParticleRebuild();
+    this.emitHud(true);
+  }
+
+  setGestureConfig(_next?: Partial<Record<string, unknown>>): void {
+    void _next;
+    if (!this.gestureConfigNoopWarned) {
+      console.warn("setGestureConfig is deprecated. Edge-sweep controls are disabled.");
+      this.gestureConfigNoopWarned = true;
+    }
+    this.emitHud(true);
+  }
+
+  setPerformanceMode(next: PerformanceMode): void {
+    const nextMode = next === "low" ? "low" : next === "high" ? "high" : "auto";
+    if (nextMode === this.performanceMode) {
+      return;
+    }
+
+    this.performanceMode = nextMode;
+    if (nextMode !== "auto") {
+      this.autoPerformancePreset = nextMode;
+    }
+    this.applyPerformancePreset();
+    if (nextMode !== "auto") {
+      this.applyParticleBudget();
+    }
+    this.emitHud(true);
+  }
+
+  setCameraResponse(next: number): void {
+    this.cameraResponse = clamp(next, 0.03, 0.4);
+    this.emitHud(true);
+  }
+
+  private getEffectivePerformanceMode(): "low" | "high" {
+    return this.performanceMode === "auto" ? this.autoPerformancePreset : this.performanceMode;
+  }
+
+  private applyParticleBudget(): void {
+    const effectiveMode = this.getEffectivePerformanceMode();
+    if (effectiveMode === "low") {
+      const adjustedCount = Math.max(LOW_PERFORMANCE_PARTICLE_FLOOR, this.particleCount);
+      if (adjustedCount !== this.particleCount) {
+        this.particleCount = adjustedCount;
+      }
+    }
+
+    this.scheduleParticleRebuild();
+    this.emitHud(true);
+  }
+
+  private applyPerformancePreset(): void {
+    const effectiveMode = this.getEffectivePerformanceMode();
+    if (!this.bloomPass || !this.afterimagePass) {
+      return;
+    }
+
+    if (effectiveMode === "low") {
+      this.bloomPass.strength = 0;
+      this.bloomPass.radius = 0;
+      this.bloomPass.threshold = 1;
+      this.afterimagePass.enabled = false;
+    } else {
+      this.bloomPass.strength = this.visualTuning.bloomStrength;
+      this.bloomPass.radius = this.visualTuning.bloomRadius;
+      this.bloomPass.threshold = this.visualTuning.bloomThreshold;
+      this.afterimagePass.enabled = this.trailsActive;
+    }
+  }
+
   setVisualTuning(next: Partial<VisualTuning>): void {
     this.visualTuning = {
       bloomStrength: clamp(next.bloomStrength ?? this.visualTuning.bloomStrength, 0, 1.5),
@@ -274,14 +462,15 @@ export class ParticleWizardRuntime {
       particleGain: clamp(next.particleGain ?? this.visualTuning.particleGain, 0.4, 1.4)
     };
 
-    if (this.bloomPass) {
+    if (this.bloomPass && this.getEffectivePerformanceMode() === "high") {
       this.bloomPass.strength = this.visualTuning.bloomStrength;
       this.bloomPass.radius = this.visualTuning.bloomRadius;
       this.bloomPass.threshold = this.visualTuning.bloomThreshold;
     }
 
-    if (this.uniforms) {
-      this.uniforms.particleGain.value = this.visualTuning.particleGain;
+    if (this.leftParticleUniforms && this.rightParticleUniforms) {
+      this.leftParticleUniforms.particleGain.value = this.visualTuning.particleGain;
+      this.rightParticleUniforms.particleGain.value = this.visualTuning.particleGain;
     }
 
     this.emitHud(true);
@@ -295,10 +484,13 @@ export class ParticleWizardRuntime {
       presetId: next.presetId
     };
 
-    if (this.uniforms) {
-      this.uniforms.colorPrimary.value.copy(toColorVector(this.palette.primary));
-      this.uniforms.colorSecondary.value.copy(toColorVector(this.palette.secondary));
-      this.uniforms.colorAccent.value.copy(toColorVector(this.palette.accent));
+    if (this.leftParticleUniforms && this.rightParticleUniforms) {
+      this.leftParticleUniforms.colorPrimary.value.copy(toColorVector(this.palette.primary));
+      this.leftParticleUniforms.colorSecondary.value.copy(toColorVector(this.palette.secondary));
+      this.leftParticleUniforms.colorAccent.value.copy(toColorVector(this.palette.accent));
+      this.rightParticleUniforms.colorPrimary.value.copy(toColorVector(this.palette.primary));
+      this.rightParticleUniforms.colorSecondary.value.copy(toColorVector(this.palette.secondary));
+      this.rightParticleUniforms.colorAccent.value.copy(toColorVector(this.palette.accent));
     }
 
     this.emitHud(true);
@@ -310,30 +502,33 @@ export class ParticleWizardRuntime {
   }
 
   async requestMic(): Promise<MicStatus> {
-    const status = await this.mic.start();
-
-    if (status === "active") {
-      this.statusOverride = {
-        text: "MIC LINK ACTIVE - Bass pump engaged.",
-        color: "#0f8",
-        until: performance.now() + 2200
-      };
-    } else if (status === "denied") {
-      this.statusOverride = {
-        text: "Mic access denied.",
-        color: "#ff8c7a",
-        until: performance.now() + 2600
-      };
-    } else if (status === "unsupported") {
-      this.statusOverride = {
-        text: "Microphone unavailable in this browser.",
-        color: "#ffaa66",
-        until: performance.now() + 2600
-      };
+    if (this.mic.isActive()) {
+      return this.mic.getStatus();
     }
-
+    const status = await this.mic.start();
+    this.applyMicStatusOverride(status, false);
     this.emitHud(true);
     return status;
+  }
+
+  async toggleMic(): Promise<MicStatus> {
+    if (this.mic.isActive()) {
+      this.mic.stop();
+      const status = this.mic.getStatus();
+      this.applyMicStatusOverride(status, true);
+      this.emitHud(true);
+      return status;
+    }
+
+    const status = await this.mic.start();
+    this.applyMicStatusOverride(status, false);
+    this.emitHud(true);
+    return status;
+  }
+
+  setMicSensitivity(value: number): void {
+    this.mic.setSensitivity(value);
+    this.emitHud(true);
   }
 
   dispose(): void {
@@ -342,13 +537,26 @@ export class ParticleWizardRuntime {
       window.cancelAnimationFrame(this.frameRequestId);
       this.frameRequestId = undefined;
     }
+    if (this.particleRebuildTimer !== undefined) {
+      window.clearTimeout(this.particleRebuildTimer);
+      this.particleRebuildTimer = undefined;
+    }
+    this.fpsFrameCount = 0;
+    this.fpsSampleStart = performance.now();
+    this.lastRenderTime = 0;
+    this.micLevel = 0;
 
     this.detachPointerControls();
     this.handController.dispose();
     this.mic.dispose();
 
-    if (this.scene && this.particles) {
-      this.scene.remove(this.particles);
+    if (this.scene) {
+      if (this.leftParticles) {
+        this.scene.remove(this.leftParticles);
+      }
+      if (this.rightParticles) {
+        this.scene.remove(this.rightParticles);
+      }
     }
     if (this.scene && this.stars) {
       this.scene.remove(this.stars);
@@ -356,7 +564,10 @@ export class ParticleWizardRuntime {
 
     this.particleGeometry?.dispose();
     this.starGeometry?.dispose();
-    this.particleMaterial?.dispose();
+    this.leftParticleMaterial?.dispose();
+    if (this.rightParticleMaterial && this.rightParticleMaterial !== this.leftParticleMaterial) {
+      this.rightParticleMaterial.dispose();
+    }
     (this.stars?.material as THREE.Material | undefined)?.dispose();
 
     this.afterimagePass?.dispose();
@@ -369,12 +580,15 @@ export class ParticleWizardRuntime {
     this.composer = undefined;
     this.bloomPass = undefined;
     this.afterimagePass = undefined;
-    this.particles = undefined;
+    this.leftParticles = undefined;
+    this.rightParticles = undefined;
     this.stars = undefined;
     this.particleGeometry = undefined;
     this.starGeometry = undefined;
-    this.particleMaterial = undefined;
-    this.uniforms = undefined;
+    this.leftParticleMaterial = undefined;
+    this.rightParticleMaterial = undefined;
+    this.leftParticleUniforms = undefined;
+    this.rightParticleUniforms = undefined;
     this.initialized = false;
   }
 
@@ -389,7 +603,7 @@ export class ParticleWizardRuntime {
       canvas: this.config.canvas,
       antialias: true
     });
-    renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+    renderer.setPixelRatio(Math.min(DPR_CAP, window.devicePixelRatio || 1));
     renderer.setClearColor(0x000000, 1);
 
     const composer = new EffectComposer(renderer);
@@ -416,6 +630,7 @@ export class ParticleWizardRuntime {
 
     this.setVisualTuning(this.visualTuning);
     this.setPalette(this.palette);
+    this.applyPerformancePreset();
 
     const initialWidth = this.config.width ?? this.config.canvas.clientWidth ?? window.innerWidth;
     const initialHeight = this.config.height ?? this.config.canvas.clientHeight ?? window.innerHeight;
@@ -425,19 +640,56 @@ export class ParticleWizardRuntime {
     this.emitHud(true);
   }
 
+  private buildParticleUniforms(isRight: number, previous?: ParticleSideUniforms): ParticleSideUniforms {
+    return {
+      time: { value: previous?.time.value ?? this.globalTime },
+      currentMode: { value: this.currentMode },
+      targetMode: { value: this.targetMode },
+      morph: { value: previous?.morph.value ?? this.morphProgress },
+      handOffset: { value: previous?.handOffset.value ? previous.handOffset.value.clone() : new THREE.Vector3(0, 0, 0) },
+      handScale: { value: previous?.handScale.value ?? 0 },
+      handFingerSignal: { value: previous?.handFingerSignal.value ?? 0 },
+      modelSeparation: { value: MODEL_SEPARATION },
+      sharedRatio: { value: previous?.sharedRatio.value ?? 1 },
+      isRight: { value: isRight },
+      bassPump: { value: previous?.bassPump.value ?? 0 },
+      colorPrimary: { value: toColorVector(this.palette.primary) },
+      colorSecondary: { value: toColorVector(this.palette.secondary) },
+      colorAccent: { value: toColorVector(this.palette.accent) },
+      particleGain: { value: previous?.particleGain.value ?? this.visualTuning.particleGain }
+    };
+  }
+
   private buildParticles(): void {
     if (!this.scene) {
       return;
     }
 
+    const previousLeftUniforms = this.leftParticleUniforms;
+    const previousRightUniforms = this.rightParticleUniforms;
+
+    if (this.leftParticles) {
+      this.scene.remove(this.leftParticles);
+    }
+    if (this.rightParticles) {
+      this.scene.remove(this.rightParticles);
+    }
+    this.leftParticles = undefined;
+    this.rightParticles = undefined;
+    this.particleGeometry?.dispose();
+    this.leftParticleMaterial?.dispose();
+    this.rightParticleMaterial?.dispose();
+
+    const count = this.particleCount;
     const rng = mulberry32(this.config.seed);
     const geometry = new THREE.BufferGeometry();
-    const positions = new Float32Array(PARTICLE_COUNT * 3);
-    const colors = new Float32Array(PARTICLE_COUNT * 3);
-    const p1Attr = new Float32Array(PARTICLE_COUNT);
-    const p2Attr = new Float32Array(PARTICLE_COUNT);
+    const positions = new Float32Array(count * 3);
+    const colors = new Float32Array(count * 3);
+    const p1Attr = new Float32Array(count);
+    const p2Attr = new Float32Array(count);
+    const p3Attr = new Float32Array(count);
 
-    for (let i = 0; i < PARTICLE_COUNT; i += 1) {
+    for (let i = 0; i < count; i += 1) {
       const index3 = i * 3;
       positions[index3] = 0;
       positions[index3 + 1] = 0;
@@ -451,16 +703,19 @@ export class ParticleWizardRuntime {
 
       p1Attr[i] = rng();
       p2Attr[i] = rng();
+      p3Attr[i] = rng();
     }
 
     geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
     geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
     geometry.setAttribute("p1", new THREE.BufferAttribute(p1Attr, 1));
     geometry.setAttribute("p2", new THREE.BufferAttribute(p2Attr, 1));
+    geometry.setAttribute("p3", new THREE.BufferAttribute(p3Attr, 1));
 
     const vertexShader = `
       attribute float p1;
       attribute float p2;
+      attribute float p3;
       attribute vec3 color;
       uniform float time;
       uniform int currentMode;
@@ -468,12 +723,23 @@ export class ParticleWizardRuntime {
       uniform float morph;
       uniform vec3 handOffset;
       uniform float handScale;
+      uniform float handFingerSignal;
+      uniform float modelSeparation;
+      uniform float sharedRatio;
+      uniform float isRight;
       uniform float bassPump;
       uniform vec3 colorPrimary;
       uniform vec3 colorSecondary;
       uniform vec3 colorAccent;
       uniform float particleGain;
       varying vec3 vColor;
+
+      float superFormula(float angle, float m, float n1, float n2, float n3, float a, float b) {
+        float c = pow(abs(cos(m * angle * 0.25) / a), n2);
+        float s = pow(abs(sin(m * angle * 0.25) / b), n3);
+        float value = pow(c + s, -1.0 / n1);
+        return clamp(value, 0.0, 3.0);
+      }
 
       vec3 getPos(int mode, float t, float a, float b) {
         vec3 p = vec3(0.0);
@@ -519,6 +785,53 @@ export class ParticleWizardRuntime {
               p.z += cos(t * 1.5 + float(k)) * 0.6;
             }
           }
+        } else if (mode == 5) {
+          float u = a * 6.28318;
+          float v = b * 6.28318;
+          float r = 4.6 * (1.0 - 0.5 * cos(u));
+          float shell = 6.0 + r * sin(v) - sin(u * 0.5) * sin(v);
+          p.x = shell * cos(u) * 1.35;
+          p.y = shell * sin(u) * 1.35 + sin(t * 1.8 + u) * 0.8;
+          p.z = (r * cos(v) + cos(u * 0.5) * sin(v) * 3.0) * 1.35;
+        } else if (mode == 6) {
+          float turns = 8.0;
+          float ang = a * 6.28318 * turns + t * 2.4;
+          float radius = 6.5 + sin(b * 6.28318 + t * 2.0) * 1.7;
+          p.x = cos(ang) * radius;
+          p.y = (a - 0.5) * 34.0 + sin(ang * 0.5 + b * 4.0) * 1.2;
+          p.z = sin(ang) * radius;
+        } else if (mode == 7) {
+          float gx = (a * 2.0 - 1.0) * 4.2;
+          float gy = (b * 2.0 - 1.0) * 4.2;
+          float gz = sin((a + b + t * 0.2) * 6.28318) * 4.2;
+          float field = sin(gx) * cos(gy) + sin(gy) * cos(gz) + sin(gz) * cos(gx);
+          p.x = gx * 2.5 + sin(t + gy) * 1.2;
+          p.y = gy * 2.5 + cos(t * 1.1 + gz) * 1.2;
+          p.z = gz * 2.5 + field * 2.6;
+        } else if (mode == 8) {
+          float ang1 = a * 6.28318;
+          float ang2 = b * 3.14159 - 1.57079;
+          float r1 = superFormula(ang1 + t * 0.35, 7.0, 0.35, 1.2, 1.2, 1.0, 1.0);
+          float r2 = superFormula(ang2, 3.0, 0.55, 1.0, 1.0, 1.0, 1.0);
+          float r = 11.0 * r1 * r2;
+          p.x = r * cos(ang1) * cos(ang2);
+          p.y = r * sin(ang1) * cos(ang2);
+          p.z = r * sin(ang2);
+          vec3 n = normalize(p + vec3(0.001));
+          p += n * sin(t * 2.2 + a * 14.0) * 1.4;
+        } else if (mode == 9) {
+          float u = a * 6.28318;
+          float pK = 3.0;
+          float qK = 5.0;
+          float core = 9.5 + 2.3 * cos(qK * u + t * 2.0);
+          float xk = core * cos(pK * u);
+          float yk = core * sin(pK * u);
+          float zk = 2.3 * sin(qK * u + t * 2.0);
+          float ring = b * 6.28318;
+          float tube = 1.4 + sin(u * 4.0 + t * 1.8) * 0.35;
+          p.x = xk + tube * cos(ring) * cos(u);
+          p.y = yk + tube * cos(ring) * sin(u);
+          p.z = zk + tube * sin(ring) * 1.3;
         }
         return p;
       }
@@ -532,7 +845,24 @@ export class ParticleWizardRuntime {
         vec3 base = getPos(currentMode, time, p1, p2);
         vec3 next = getPos(targetMode, time, p1, p2);
         vec3 pos = mix(base, next, morph);
-        pos = pos * (1.0 + handScale * 0.45) + handOffset * 3.5;
+
+        float split = max(0.0, (1.0 - sharedRatio) * 0.5);
+        float shared = 1.0 - step(sharedRatio, p3);
+        float splitStart = sharedRatio + split;
+        float leftExclusive = step(sharedRatio, p3) * (1.0 - step(splitStart, p3));
+        float rightExclusive = step(splitStart, p3);
+        float rightSide = step(0.5, isRight);
+        float visible = max(shared, mix(leftExclusive, rightExclusive, rightSide));
+        if (visible < 0.5) {
+          discard;
+        }
+
+        pos.x *= mix(1.0, -1.0, rightSide);
+        pos.x += mix(-modelSeparation, modelSeparation, rightSide);
+
+        float normalizedFingerSignal = clamp(handFingerSignal, 0.0, 1.0);
+        float sideScale = handScale * (1.0 + normalizedFingerSignal * 0.35);
+        pos = pos * (1.0 + sideScale * 0.45) + handOffset * 3.5;
         pos += normalize(pos) * bassPump * 1.8;
         vec4 mvPos = modelViewMatrix * vec4(pos, 1.0);
         float sizeRaw = 4.2 * (420.0 / -mvPos.z) * (1.0 + bassPump * 2.5 + 0.4 * sin(time * 6.0 + p1 * 30.0));
@@ -555,22 +885,11 @@ export class ParticleWizardRuntime {
       }
     `;
 
-    const uniforms: ParticleUniforms = {
-      time: { value: 0 },
-      currentMode: { value: 0 },
-      targetMode: { value: 0 },
-      morph: { value: 1 },
-      handOffset: { value: new THREE.Vector3(0, 0, 0) },
-      handScale: { value: 0 },
-      bassPump: { value: 0 },
-      colorPrimary: { value: toColorVector(this.palette.primary) },
-      colorSecondary: { value: toColorVector(this.palette.secondary) },
-      colorAccent: { value: toColorVector(this.palette.accent) },
-      particleGain: { value: this.visualTuning.particleGain }
-    };
+    const leftUniforms = this.buildParticleUniforms(0, previousLeftUniforms);
+    const rightUniforms = this.buildParticleUniforms(1, previousRightUniforms);
 
-    const material = new THREE.ShaderMaterial({
-      uniforms,
+    const leftMaterial = new THREE.ShaderMaterial({
+      uniforms: leftUniforms,
       vertexShader,
       fragmentShader,
       transparent: true,
@@ -579,12 +898,25 @@ export class ParticleWizardRuntime {
       depthWrite: false
     });
 
-    const points = new THREE.Points(geometry, material);
-    this.uniforms = uniforms;
+    const rightMaterial = new THREE.ShaderMaterial({
+      uniforms: rightUniforms,
+      vertexShader,
+      fragmentShader,
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthTest: false,
+      depthWrite: false
+    });
+
+    this.leftParticleUniforms = leftUniforms;
+    this.rightParticleUniforms = rightUniforms;
     this.particleGeometry = geometry;
-    this.particleMaterial = material;
-    this.particles = points;
-    this.scene.add(points);
+    this.leftParticleMaterial = leftMaterial;
+    this.rightParticleMaterial = rightMaterial;
+    this.leftParticles = new THREE.Points(geometry, leftMaterial);
+    this.rightParticles = new THREE.Points(geometry, rightMaterial);
+    this.scene.add(this.leftParticles);
+    this.scene.add(this.rightParticles);
   }
 
   private buildStars(): void {
@@ -661,12 +993,42 @@ export class ParticleWizardRuntime {
     this.targetDist = clamp(this.targetDist + event.deltaY * 0.04, 14, 88);
   };
 
+  private scheduleParticleRebuild(): void {
+    if (this.particleRebuildTimer !== undefined) {
+      window.clearTimeout(this.particleRebuildTimer);
+    }
+
+    this.particleRebuildTimer = window.setTimeout(() => {
+      this.particleRebuildTimer = undefined;
+      if (!this.scene || !this.leftParticleUniforms || !this.rightParticleUniforms) {
+        return;
+      }
+      this.buildParticles();
+      this.emitHud(true);
+    }, 140);
+  }
+
   private readonly tick = (now: number): void => {
-    if (!this.running || !this.camera || !this.composer || !this.uniforms) {
+    if (
+      !this.running ||
+      !this.camera ||
+      !this.composer ||
+      !this.leftParticleUniforms ||
+      !this.rightParticleUniforms
+    ) {
       return;
     }
 
-    const dt = this.config.fixedTimeSec === undefined ? this.clock.getDelta() : 1 / 60;
+    if (this.config.fixedTimeSec === undefined) {
+      const frameIntervalMs = 1000 / this.targetFps;
+      if (this.lastRenderTime !== 0 && now - this.lastRenderTime < frameIntervalMs) {
+        this.frameRequestId = window.requestAnimationFrame(this.tick);
+        return;
+      }
+      this.lastRenderTime = now;
+    }
+
+    const dt = this.config.fixedTimeSec === undefined ? this.clock.getDelta() : 1 / FPS_CAP_DEFAULT;
 
     if (this.config.fixedTimeSec !== undefined) {
       this.globalTime = this.config.fixedTimeSec;
@@ -675,14 +1037,44 @@ export class ParticleWizardRuntime {
     }
 
     if (this.morphProgress < 1) {
-      this.morphProgress = Math.min(1, this.morphProgress + dt * 2.9);
+      this.morphProgress = Math.min(1, this.morphProgress + dt / MORPH_DURATION_SEC);
     }
-    this.uniforms.morph.value = this.morphProgress;
-    this.uniforms.time.value = this.globalTime;
+    this.leftParticleUniforms.morph.value = this.morphProgress;
+    this.rightParticleUniforms.morph.value = this.morphProgress;
+    this.leftParticleUniforms.time.value = this.globalTime;
+    this.rightParticleUniforms.time.value = this.globalTime;
 
-    this.curAz = this.curAz * 0.85 + this.targetAz * 0.15;
-    this.curPol = this.curPol * 0.85 + this.targetPol * 0.15;
-    this.curDist = this.curDist * 0.85 + this.targetDist * 0.15;
+    this.handController.update(dt, this.globalTime);
+    const leftHandOffset = this.handController.getLeftOffset();
+    const rightHandOffset = this.handController.getRightOffset();
+    const leftHandScale = this.handController.getLeftScale();
+    const rightHandScale = this.handController.getRightScale();
+    const leftFingerSignal = this.handController.getLeftFingerSignal();
+    const rightFingerSignal = this.handController.getRightFingerSignal();
+
+    const leftCenter = new THREE.Vector3(-MODEL_SEPARATION, 0, 0).add(new THREE.Vector3(leftHandOffset.x, leftHandOffset.y, leftHandOffset.z));
+    const rightCenter = new THREE.Vector3(MODEL_SEPARATION, 0, 0).add(new THREE.Vector3(rightHandOffset.x, rightHandOffset.y, rightHandOffset.z));
+    const sharedRatio = computeSharedRatio(leftCenter.distanceTo(rightCenter), SHARED_NEAR_DISTANCE, SHARED_FAR_DISTANCE);
+
+    this.leftParticleUniforms.handOffset.value.set(leftHandOffset.x, leftHandOffset.y, leftHandOffset.z);
+    this.leftParticleUniforms.handScale.value = leftHandScale;
+    this.leftParticleUniforms.handFingerSignal.value = leftFingerSignal;
+    this.leftParticleUniforms.sharedRatio.value = sharedRatio;
+
+    this.rightParticleUniforms.handOffset.value.set(rightHandOffset.x, rightHandOffset.y, rightHandOffset.z);
+    this.rightParticleUniforms.handScale.value = rightHandScale;
+    this.rightParticleUniforms.handFingerSignal.value = rightFingerSignal;
+    this.rightParticleUniforms.sharedRatio.value = sharedRatio;
+
+    const leftHandDebug = this.handUiState.debug;
+    leftHandDebug.sharedRatio = sharedRatio;
+    leftHandDebug.sharedBudget = Math.round(this.particleCount * sharedRatio);
+
+    const cameraFollow = clamp(this.cameraResponse, 0.03, 0.4);
+    const cameraKeep = 1 - cameraFollow;
+    this.curAz = this.curAz * cameraKeep + this.targetAz * cameraFollow;
+    this.curPol = this.curPol * cameraKeep + this.targetPol * cameraFollow;
+    this.curDist = this.curDist * cameraKeep + this.targetDist * cameraFollow;
 
     this.camera.position.x = this.curDist * Math.sin(this.curPol) * Math.cos(this.curAz);
     this.camera.position.y = this.curDist * Math.cos(this.curPol) * 0.75;
@@ -690,22 +1082,31 @@ export class ParticleWizardRuntime {
     this.camera.lookAt(0, 3, 0);
 
     const bassPump = this.mic.update(dt, this.globalTime);
-    this.uniforms.bassPump.value = bassPump;
-
-    this.handController.update(dt, this.globalTime);
-    const handOffset = this.handController.getOffset();
-    this.uniforms.handOffset.value.set(handOffset.x, handOffset.y, handOffset.z);
-    this.uniforms.handScale.value = this.handController.getScale();
+    this.micLevel = bassPump;
+    this.leftParticleUniforms.bassPump.value = bassPump;
+    this.rightParticleUniforms.bassPump.value = bassPump;
 
     this.composer.render();
 
     this.fpsFrameCount += 1;
     if (this.config.fixedTimeSec !== undefined) {
-      this.fps = 60;
+      this.fps = this.targetFps;
     } else if (now - this.fpsSampleStart > 950) {
-      this.fps = Math.min(60, Math.round((this.fpsFrameCount * 1000) / (now - this.fpsSampleStart)));
+      this.fps = Math.round((this.fpsFrameCount * 1000) / (now - this.fpsSampleStart));
       this.fpsFrameCount = 0;
       this.fpsSampleStart = now;
+
+      if (this.performanceMode === "auto") {
+        if (this.fps <= AUTO_LOW_FPS_THRESHOLD && this.autoPerformancePreset === "high") {
+          this.autoPerformancePreset = "low";
+          this.applyPerformancePreset();
+          this.applyParticleBudget();
+        } else if (this.fps >= AUTO_HIGH_FPS_THRESHOLD && this.autoPerformancePreset === "low") {
+          this.autoPerformancePreset = "high";
+          this.applyPerformancePreset();
+          this.applyParticleBudget();
+        }
+      }
     }
 
     this.emitHud();
@@ -719,6 +1120,52 @@ export class ParticleWizardRuntime {
     this.frameRequestId = window.requestAnimationFrame(this.tick);
   };
 
+  private applyMicStatusOverride(status: MicStatus, wasManualStop: boolean): void {
+    if (wasManualStop) {
+      this.statusOverride = {
+        text: "Microphone muted.",
+        color: "#7fc4ff",
+        until: performance.now() + 2200
+      };
+      return;
+    }
+
+    if (status === "active") {
+      this.statusOverride = {
+        text: "MIC LINK ACTIVE - Bass pump engaged.",
+        color: "#0f8",
+        until: performance.now() + 2200
+      };
+      return;
+    }
+
+    if (status === "denied") {
+      this.statusOverride = {
+        text: "Mic access denied.",
+        color: "#ff8c7a",
+        until: performance.now() + 2600
+      };
+      return;
+    }
+
+    if (status === "unsupported") {
+      this.statusOverride = {
+        text: "Microphone unavailable in this browser.",
+        color: "#ffaa66",
+        until: performance.now() + 2600
+      };
+      return;
+    }
+
+    if (status === "error") {
+      this.statusOverride = {
+        text: "Microphone error.",
+        color: "#ffaa66",
+        until: performance.now() + 2600
+      };
+    }
+  }
+
   private emitHud(force = false): void {
     if (!this.config.onHudUpdate) {
       return;
@@ -731,7 +1178,26 @@ export class ParticleWizardRuntime {
     this.lastHudEmitTime = now;
 
     const micStatus = this.mic.getStatus();
+    const micActive = this.mic.isActive();
     const modeName = MODE_NAMES[this.targetMode];
+    const micButtonText =
+      micStatus === "denied"
+        ? "MIC DENIED"
+        : micStatus === "unsupported"
+          ? "MIC UNSUPPORTED"
+          : micStatus === "error"
+            ? "MIC ERROR"
+            : micActive
+              ? "MIC ON"
+              : "MIC OFF";
+    const micButtonColor =
+      micStatus === "denied" || micStatus === "error"
+        ? "#ff8c7a"
+        : micStatus === "unsupported"
+          ? "#ffaa66"
+          : micActive
+            ? "#0f8"
+            : "#00ffff";
 
     let statusText = this.handUiState.statusText;
     let statusColor = this.handUiState.statusColor;
@@ -745,10 +1211,12 @@ export class ParticleWizardRuntime {
     }
 
     this.config.onHudUpdate({
-      particleCount: PARTICLE_COUNT,
+      particleCount: this.particleCount,
+      targetFps: this.targetFps,
       fps: this.fps,
       modeName,
-      title: `${modeName} WIZARD`,
+      modeNames: MODE_NAMES,
+      title: "PARTICLE WIZARD",
       trailsText: this.trailsActive ? "ACTIVE" : "OFF",
       trailsActive: this.trailsActive,
       flowActive: this.flowActive,
@@ -757,12 +1225,23 @@ export class ParticleWizardRuntime {
       statusColor,
       webcamVisible: this.handUiState.webcamVisible,
       calibrationOpacity: this.handUiState.overlayOpacity,
-      micButtonText: micStatus === "denied" ? "MIC DENIED" : "MIC ON",
-      micButtonColor: micStatus === "active" ? "#0f8" : "#00ffff",
+      micButtonText,
+      micButtonColor,
       micStatus,
+      micSensitivity: this.mic.getSensitivity(),
+      micLevel: this.micLevel,
       handMode: this.handUiState.handMode,
       handTrackingState: this.handUiState.handTrackingState,
       handDebug: this.handUiState.debug,
+      cameraDebug: {
+        azimuth: this.curAz,
+        polar: this.curPol,
+        distance: this.curDist,
+        targetAzimuth: this.targetAz,
+        targetPolar: this.targetPol,
+        targetDistance: this.targetDist,
+        response: this.cameraResponse
+      },
       visualTuning: { ...this.visualTuning },
       palette: { ...this.palette }
     });

@@ -1,4 +1,4 @@
-# VibeViz Implementation Stages
+# PARTICLE WIZARD Implementation Stages
 
 This file is the canonical staged execution checklist for the project.
 All agents must update stage and step status here as work progresses.
@@ -16,6 +16,7 @@ All agents must update stage and step status here as work progresses.
 - [x] Implement `src/core/*` runtime modules (`RendererCore`, `Timebase`, scene/camera/hotkeys)
 - [x] Implement dock layout shell and panel scaffolding
 - [x] Add debug overlay wiring (`fps`, `t`, `loopT`, telemetry)
+- [x] Add Particle Wizard fullscreen/hotkey controls and live FPS/particle sliders
 - [x] Run smoke e2e and panel toggle verification
 
 ## Stage 2 - Templates Pack v1 and Presets
@@ -41,6 +42,8 @@ All agents must update stage and step status here as work progresses.
 - [x] Implement `ModelEngine` GLB loading/centering/scaling
 - [x] Add explicit GLB load/reload button and preview refresh flow
 - [x] Sanitize GLB imports to mesh-only + texture-free materials
+- [x] Replace circular webcam calibration marker with dual left/right palm outlines and per-palm readiness lighting
+- [x] Keep palm outlines faintly visible post-activation and support 1.5s live dual-hand recalibration
 - [x] Add per-parameter MIDI/Webcam/Audio control toggles with auto-modulator IDs
 - [x] Extend modulation runtime for non-number params (boolean/select/color)
 - [ ] Verify e2e behavior for mock MIDI/Webcam/model upload (model upload scenario not yet covered by Playwright fixture)

@@ -38,7 +38,7 @@ describe("Exporter", () => {
     const exporter = new Exporter();
     const html = exporter.exportEmbedHtml(preset);
 
-    expect(html).toContain("VibeViz Embed");
+    expect(html).toContain("PARTICLE WIZARD Embed");
     expect(html).toContain("sample");
   });
 });

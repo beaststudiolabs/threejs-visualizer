@@ -66,4 +66,20 @@ describe("PresetManager", () => {
     expect(reopenedList.length).toBe(31);
     expect(reopenedList.filter((preset) => preset.name === "custom")).toHaveLength(1);
   });
+
+  it("migrates presets from legacy storage key once", () => {
+    localStorage.setItem("vibeviz:presets", JSON.stringify([makePreset("legacy-alpha")]));
+
+    const manager = new PresetManager(undefined, { seedFactoryPresets: false });
+    expect(manager.list()).toHaveLength(1);
+    expect(manager.load("legacy-alpha")?.name).toBe("legacy-alpha");
+
+    const migratedRaw = localStorage.getItem("particle-wizard:presets");
+    expect(migratedRaw).not.toBeNull();
+
+    localStorage.setItem("vibeviz:presets", JSON.stringify([makePreset("legacy-beta")]));
+    const reopened = new PresetManager(undefined, { seedFactoryPresets: false });
+    expect(reopened.load("legacy-alpha")?.name).toBe("legacy-alpha");
+    expect(reopened.load("legacy-beta")).toBeUndefined();
+  });
 });

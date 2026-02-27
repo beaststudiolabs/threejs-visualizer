@@ -1,6 +1,6 @@
-# VibeViz Context
+# PARTICLE WIZARD Context
 
-VibeViz is a deterministic Three.js visualizer generator with a TouchDesigner-lite workflow.
+PARTICLE WIZARD is a deterministic Three.js visualizer generator with a TouchDesigner-lite workflow.
 
 ## Binding Policy
 

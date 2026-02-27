@@ -4,13 +4,22 @@ export type Vec3 = {
   z: number;
 };
 
+export type Vec3WithFingers = Vec3 & {
+  thumbTip?: Vec3;
+  indexTip?: Vec3;
+};
+
+export type PalmPose = Vec3WithFingers & {
+  landmarks?: Vec3[];
+};
+
 export type Rgb = {
   r: number;
   g: number;
   b: number;
 };
 
-export type PalmCandidate = Vec3 & {
+export type PalmCandidate = PalmPose & {
   label?: string;
 };
 
@@ -22,18 +31,103 @@ export type PalmAssignment =
   | {
       mode: "single";
       source: "single";
-      single: Vec3;
+      single: PalmPose;
     }
   | {
       mode: "dual";
       source: "labels" | "sorted";
-      left: Vec3;
-      right: Vec3;
+      left: PalmPose;
+      right: PalmPose;
     };
 
 export const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
 
 export const clamp01 = (value: number): number => clamp(value, 0, 1);
+
+export type PalmTarget = {
+  x: number;
+  y: number;
+};
+
+export type DualPalmTargetConfig = {
+  leftTarget: PalmTarget;
+  rightTarget: PalmTarget;
+  toleranceX: number;
+  toleranceY: number;
+};
+
+type DualPalmTargetConfigInput = {
+  leftTarget?: Partial<PalmTarget>;
+  rightTarget?: Partial<PalmTarget>;
+  toleranceX?: number;
+  toleranceY?: number;
+};
+
+export type DualPalmTargetState = {
+  leftTargetReady: boolean;
+  rightTargetReady: boolean;
+  inCenter: boolean;
+};
+
+export const DEFAULT_DUAL_PALM_TARGET_CONFIG: DualPalmTargetConfig = {
+  leftTarget: { x: 0.36, y: 0.5 },
+  rightTarget: { x: 0.64, y: 0.5 },
+  toleranceX: 0.1,
+  toleranceY: 0.14
+};
+
+export const mirrorWebcamX = (rawX: number): number => clamp01(1 - rawX);
+
+const isWithinPalmTarget = (
+  displayX: number,
+  y: number,
+  target: PalmTarget,
+  toleranceX: number,
+  toleranceY: number
+): boolean => Math.abs(displayX - target.x) <= toleranceX && Math.abs(y - target.y) <= toleranceY;
+
+export const evaluateDualPalmTargets = (
+  leftPalm: Vec3,
+  rightPalm: Vec3,
+  config: DualPalmTargetConfigInput = {}
+): DualPalmTargetState => {
+  const mergedConfig: DualPalmTargetConfig = {
+    leftTarget: {
+      x: config.leftTarget?.x ?? DEFAULT_DUAL_PALM_TARGET_CONFIG.leftTarget.x,
+      y: config.leftTarget?.y ?? DEFAULT_DUAL_PALM_TARGET_CONFIG.leftTarget.y
+    },
+    rightTarget: {
+      x: config.rightTarget?.x ?? DEFAULT_DUAL_PALM_TARGET_CONFIG.rightTarget.x,
+      y: config.rightTarget?.y ?? DEFAULT_DUAL_PALM_TARGET_CONFIG.rightTarget.y
+    },
+    toleranceX: clamp(config.toleranceX ?? DEFAULT_DUAL_PALM_TARGET_CONFIG.toleranceX, 0, 0.45),
+    toleranceY: clamp(config.toleranceY ?? DEFAULT_DUAL_PALM_TARGET_CONFIG.toleranceY, 0, 0.45)
+  };
+
+  const leftDisplayX = mirrorWebcamX(leftPalm.x);
+  const rightDisplayX = mirrorWebcamX(rightPalm.x);
+
+  const leftTargetReady = isWithinPalmTarget(
+    leftDisplayX,
+    leftPalm.y,
+    mergedConfig.leftTarget,
+    mergedConfig.toleranceX,
+    mergedConfig.toleranceY
+  );
+  const rightTargetReady = isWithinPalmTarget(
+    rightDisplayX,
+    rightPalm.y,
+    mergedConfig.rightTarget,
+    mergedConfig.toleranceX,
+    mergedConfig.toleranceY
+  );
+
+  return {
+    leftTargetReady,
+    rightTargetReady,
+    inCenter: leftTargetReady && rightTargetReady
+  };
+};
 
 export const isCalibrationCenter = (centerX: number, centerY: number, min = 0.38, max = 0.62): boolean =>
   centerX > min && centerX < max && centerY > min && centerY < max;
@@ -42,6 +136,104 @@ export const updateCalibrationTimer = (currentMs: number, inCenter: boolean, ste
   inCenter ? currentMs + stepMs : 0;
 
 export const shouldActivateCalibration = (timerMs: number, thresholdMs = 2000): boolean => timerMs > thresholdMs;
+
+export const computeFingerSignal = (current: Vec3WithFingers, neutral: Vec3WithFingers, maxRange = 0.2): number => {
+  if (!current.thumbTip || !current.indexTip || !neutral.thumbTip || !neutral.indexTip) {
+    return 0;
+  }
+
+  const currentDistance = Math.hypot(
+    current.thumbTip.x - current.indexTip.x,
+    current.thumbTip.y - current.indexTip.y,
+    current.thumbTip.z - current.indexTip.z
+  );
+  const neutralDistance = Math.hypot(
+    neutral.thumbTip.x - neutral.indexTip.x,
+    neutral.thumbTip.y - neutral.indexTip.y,
+    neutral.thumbTip.z - neutral.indexTip.z
+  );
+
+  const range = clamp(Math.abs(maxRange), 0.001, 1);
+  const delta = clamp(neutralDistance - currentDistance, -range, range);
+  return clamp01((delta + range) / (2 * range));
+};
+
+export const mapHandPoseForModel = (
+  palm: Vec3WithFingers,
+  neutral: Vec3WithFingers,
+  options: {
+    xScale?: number;
+    yScale?: number;
+    zScale?: number;
+    fingerRange?: number;
+  } = {}
+): { offset: Vec3; spread: number; fingerSignal: number } => {
+  const offset = {
+    x: (palm.x - neutral.x) * (options.xScale ?? 22),
+    y: (palm.y - neutral.y) * (options.yScale ?? -18),
+    z: (palm.z - neutral.z) * (options.zScale ?? 12)
+  };
+  const spread = clamp(Math.hypot(offset.x, offset.y, offset.z), 0, 3.5);
+  const fingerSignal = computeFingerSignal(palm, neutral, options.fingerRange ?? 0.2);
+  return { offset, spread, fingerSignal };
+};
+
+export const mapLeftHandPose = (
+  palm: Vec3WithFingers,
+  neutral: Vec3WithFingers,
+  options: Parameters<typeof mapHandPoseForModel>[2] = {}
+): { offset: Vec3; spread: number; fingerSignal: number } =>
+  mapHandPoseForModel(palm, neutral, {
+    xScale: options.xScale ?? 22,
+    yScale: options.yScale ?? -18,
+    zScale: options.zScale ?? 12,
+    fingerRange: options.fingerRange ?? 0.2
+  });
+
+export const mapRightHandPose = (
+  palm: Vec3WithFingers,
+  neutral: Vec3WithFingers,
+  options: Parameters<typeof mapHandPoseForModel>[2] = {}
+): { offset: Vec3; spread: number; fingerSignal: number } =>
+  mapHandPoseForModel(palm, neutral, {
+    xScale: options.xScale ?? 22,
+    yScale: options.yScale ?? -18,
+    zScale: options.zScale ?? 12,
+    fingerRange: options.fingerRange ?? 0.2
+  });
+
+export const computeSharedRatio = (distance: number, nearDistance: number, farDistance: number): number => {
+  if (!Number.isFinite(distance)) {
+    return 0;
+  }
+  if (distance <= nearDistance) {
+    return 1;
+  }
+  if (distance >= farDistance) {
+    return 0;
+  }
+  return 1 - clamp01((distance - nearDistance) / Math.max(0.001, farDistance - nearDistance));
+};
+
+export const resolveSharedParticleAssignment = (
+  shareSeed: number,
+  sharedRatio: number
+): "shared" | "left" | "right" => {
+  const seed = clamp01(shareSeed);
+  const shared = clamp01(sharedRatio);
+
+  const sharedRange = shared;
+  const splitRange = (1 - sharedRange) * 0.5;
+  const splitStart = sharedRange + splitRange;
+
+  if (seed < sharedRange) {
+    return "shared";
+  }
+  if (seed < splitStart) {
+    return "left";
+  }
+  return "right";
+};
 
 export const mapHandPose = (leftPalm: Vec3, rightPalm: Vec3, neutralLeft: Vec3, neutralRight: Vec3): { offset: Vec3; spread: number } => {
   const offset = {
@@ -55,15 +247,15 @@ export const mapHandPose = (leftPalm: Vec3, rightPalm: Vec3, neutralLeft: Vec3, 
   return { offset, spread };
 };
 
-export const mapSingleHandPose = (palm: Vec3, neutral: Vec3): { offset: Vec3; spread: number } => {
-  const offset = {
-    x: (palm.x - neutral.x) * 22,
-    y: (palm.y - neutral.y) * -18,
-    z: (palm.z - neutral.z) * 12
-  };
+export const mapSingleHandPose = (
+  palm: Vec3WithFingers,
+  neutral: Vec3WithFingers
+): { offset: Vec3; spread: number; fingerSignal: number } => {
+  const mapped = mapHandPoseForModel(palm, neutral);
+  const offset = mapped.offset;
   const motionMagnitude = Math.hypot(offset.x, offset.y, offset.z);
   const spread = clamp(motionMagnitude * 0.35, 0, 3.5);
-  return { offset, spread };
+  return { offset, spread, fingerSignal: mapped.fingerSignal };
 };
 
 export const smoothHandState = (
@@ -99,7 +291,14 @@ export const resolvePalmAssignment = (candidates: PalmCandidate[]): PalmAssignme
     return {
       mode: "single",
       source: "single",
-      single: { x: palm.x, y: palm.y, z: palm.z }
+      single: {
+        x: palm.x,
+        y: palm.y,
+        z: palm.z,
+        thumbTip: palm.thumbTip,
+        indexTip: palm.indexTip,
+        landmarks: palm.landmarks
+      }
     };
   }
 
@@ -110,8 +309,22 @@ export const resolvePalmAssignment = (candidates: PalmCandidate[]): PalmAssignme
     return {
       mode: "dual",
       source: "labels",
-      left: { x: leftLabeled.x, y: leftLabeled.y, z: leftLabeled.z },
-      right: { x: rightLabeled.x, y: rightLabeled.y, z: rightLabeled.z }
+      left: {
+        x: leftLabeled.x,
+        y: leftLabeled.y,
+        z: leftLabeled.z,
+        thumbTip: leftLabeled.thumbTip,
+        indexTip: leftLabeled.indexTip,
+        landmarks: leftLabeled.landmarks
+      },
+      right: {
+        x: rightLabeled.x,
+        y: rightLabeled.y,
+        z: rightLabeled.z,
+        thumbTip: rightLabeled.thumbTip,
+        indexTip: rightLabeled.indexTip,
+        landmarks: rightLabeled.landmarks
+      }
     };
   }
 
@@ -119,8 +332,22 @@ export const resolvePalmAssignment = (candidates: PalmCandidate[]): PalmAssignme
   return {
     mode: "dual",
     source: "sorted",
-    left: { x: sorted[0].x, y: sorted[0].y, z: sorted[0].z },
-    right: { x: sorted[sorted.length - 1].x, y: sorted[sorted.length - 1].y, z: sorted[sorted.length - 1].z }
+    left: {
+      x: sorted[0].x,
+      y: sorted[0].y,
+      z: sorted[0].z,
+      thumbTip: sorted[0].thumbTip,
+      indexTip: sorted[0].indexTip,
+      landmarks: sorted[0].landmarks
+    },
+    right: {
+      x: sorted[sorted.length - 1].x,
+      y: sorted[sorted.length - 1].y,
+      z: sorted[sorted.length - 1].z,
+      thumbTip: sorted[sorted.length - 1].thumbTip,
+      indexTip: sorted[sorted.length - 1].indexTip,
+      landmarks: sorted[sorted.length - 1].landmarks
+    }
   };
 };
 
@@ -145,6 +372,12 @@ export const blendPaletteColor = (
     g: clamp01((mixAB.g + (accent.g - mixAB.g) * accentWeight) * base),
     b: clamp01((mixAB.b + (accent.b - mixAB.b) * accentWeight) * base)
   };
+};
+
+const superFormula = (angle: number, m: number, n1: number, n2: number, n3: number, a = 1, b = 1): number => {
+  const c = Math.pow(Math.abs(Math.cos((m * angle) / 4) / a), n2);
+  const s = Math.pow(Math.abs(Math.sin((m * angle) / 4) / b), n3);
+  return clamp(Math.pow(c + s, -1 / n1), 0, 3);
 };
 
 export const computeModePosition = (mode: number, t: number, a: number, b: number): Vec3 => {
@@ -193,17 +426,84 @@ export const computeModePosition = (mode: number, t: number, a: number, b: numbe
     return p;
   }
 
-  const depth = Math.floor(a * 7);
-  const ang = b * tau * 3.2;
-  const len = 14 * Math.pow(0.61, depth);
-  p.x = Math.sin(ang) * len * 0.85;
-  p.y = 9.5 - depth * 2.6;
-  p.z = Math.cos(ang * 1.55) * len * 0.75;
-  for (let k = 0; k < 6; k += 1) {
-    if (k <= depth) {
-      p.x += Math.sin(t * 1.8 + k * 2.4) * 0.7;
-      p.z += Math.cos(t * 1.5 + k) * 0.6;
+  if (mode === 4) {
+    const depth = Math.floor(a * 7);
+    const ang = b * tau * 3.2;
+    const len = 14 * Math.pow(0.61, depth);
+    p.x = Math.sin(ang) * len * 0.85;
+    p.y = 9.5 - depth * 2.6;
+    p.z = Math.cos(ang * 1.55) * len * 0.75;
+    for (let k = 0; k < 6; k += 1) {
+      if (k <= depth) {
+        p.x += Math.sin(t * 1.8 + k * 2.4) * 0.7;
+        p.z += Math.cos(t * 1.5 + k) * 0.6;
+      }
     }
+    return p;
   }
+
+  if (mode === 5) {
+    const u = a * tau;
+    const v = b * tau;
+    const r = 4.6 * (1 - 0.5 * Math.cos(u));
+    const shell = 6 + r * Math.sin(v) - Math.sin(u * 0.5) * Math.sin(v);
+    p.x = shell * Math.cos(u) * 1.35;
+    p.y = shell * Math.sin(u) * 1.35 + Math.sin(t * 1.8 + u) * 0.8;
+    p.z = (r * Math.cos(v) + Math.cos(u * 0.5) * Math.sin(v) * 3) * 1.35;
+    return p;
+  }
+
+  if (mode === 6) {
+    const turns = 8;
+    const ang = a * tau * turns + t * 2.4;
+    const radius = 6.5 + Math.sin(b * tau + t * 2) * 1.7;
+    p.x = Math.cos(ang) * radius;
+    p.y = (a - 0.5) * 34 + Math.sin(ang * 0.5 + b * 4) * 1.2;
+    p.z = Math.sin(ang) * radius;
+    return p;
+  }
+
+  if (mode === 7) {
+    const gx = (a * 2 - 1) * 4.2;
+    const gy = (b * 2 - 1) * 4.2;
+    const gz = Math.sin((a + b + t * 0.2) * tau) * 4.2;
+    const field = Math.sin(gx) * Math.cos(gy) + Math.sin(gy) * Math.cos(gz) + Math.sin(gz) * Math.cos(gx);
+    p.x = gx * 2.5 + Math.sin(t + gy) * 1.2;
+    p.y = gy * 2.5 + Math.cos(t * 1.1 + gz) * 1.2;
+    p.z = gz * 2.5 + field * 2.6;
+    return p;
+  }
+
+  if (mode === 8) {
+    const ang1 = a * tau;
+    const ang2 = b * pi - pi / 2;
+    const r1 = superFormula(ang1 + t * 0.35, 7, 0.35, 1.2, 1.2);
+    const r2 = superFormula(ang2, 3, 0.55, 1, 1);
+    const r = 11 * r1 * r2;
+    p.x = r * Math.cos(ang1) * Math.cos(ang2);
+    p.y = r * Math.sin(ang1) * Math.cos(ang2);
+    p.z = r * Math.sin(ang2);
+    const mag = Math.hypot(p.x, p.y, p.z) || 1;
+    const nx = p.x / mag;
+    const ny = p.y / mag;
+    const nz = p.z / mag;
+    p.x += nx * Math.sin(t * 2.2 + a * 14) * 1.4;
+    p.y += ny * Math.sin(t * 2.2 + a * 14) * 1.4;
+    p.z += nz * Math.sin(t * 2.2 + a * 14) * 1.4;
+    return p;
+  }
+
+  const u = a * tau;
+  const pK = 3;
+  const qK = 5;
+  const core = 9.5 + 2.3 * Math.cos(qK * u + t * 2);
+  const xk = core * Math.cos(pK * u);
+  const yk = core * Math.sin(pK * u);
+  const zk = 2.3 * Math.sin(qK * u + t * 2);
+  const ring = b * tau;
+  const tube = 1.4 + Math.sin(u * 4 + t * 1.8) * 0.35;
+  p.x = xk + tube * Math.cos(ring) * Math.cos(u);
+  p.y = yk + tube * Math.cos(ring) * Math.sin(u);
+  p.z = zk + tube * Math.sin(ring) * 1.3;
   return p;
 };

@@ -2,6 +2,9 @@ import type { PresetV1 } from "../contracts/types";
 import { FACTORY_PRESETS } from "./factoryPresets";
 import { migratePreset } from "./migrations";
 
+const DEFAULT_STORAGE_KEY = "particle-wizard:presets";
+const LEGACY_STORAGE_KEY = "vibeviz:presets";
+
 const clonePreset = (preset: PresetV1): PresetV1 => ({
   ...preset,
   params: { ...preset.params },
@@ -17,10 +20,12 @@ const clonePreset = (preset: PresetV1): PresetV1 => ({
 
 export class PresetManager {
   private readonly storageKey: string;
+  private readonly legacyStorageKey?: string;
   private readonly seedFactoryPresets: boolean;
 
-  constructor(storageKey = "vibeviz:presets", options: { seedFactoryPresets?: boolean } = {}) {
+  constructor(storageKey = DEFAULT_STORAGE_KEY, options: { seedFactoryPresets?: boolean } = {}) {
     this.storageKey = storageKey;
+    this.legacyStorageKey = storageKey === DEFAULT_STORAGE_KEY ? LEGACY_STORAGE_KEY : undefined;
     this.seedFactoryPresets = options.seedFactoryPresets ?? true;
   }
 
@@ -72,8 +77,23 @@ export class PresetManager {
 
   private readStored(): PresetV1[] {
     const raw = localStorage.getItem(this.storageKey);
-    if (!raw) return [];
+    if (!raw && this.legacyStorageKey) {
+      const legacyRaw = localStorage.getItem(this.legacyStorageKey);
+      if (!legacyRaw) {
+        return [];
+      }
+      const migrated = this.parseStored(legacyRaw);
+      localStorage.setItem(this.storageKey, JSON.stringify(migrated));
+      return migrated;
+    }
+    if (!raw) {
+      return [];
+    }
 
+    return this.parseStored(raw);
+  }
+
+  private parseStored(raw: string): PresetV1[] {
     const parsed = JSON.parse(raw) as unknown[];
     return parsed.map((item) => this.migrate(item));
   }

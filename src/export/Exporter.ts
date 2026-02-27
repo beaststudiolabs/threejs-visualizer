@@ -2,13 +2,13 @@ import { strToU8, zipSync } from "fflate";
 import type { PresetV1 } from "../contracts/types";
 
 const TEMPLATE_FILES: Record<string, string> = {
-  "README.md": "# Exported VibeViz Project\n\nRun `pnpm install` and `pnpm dev`.\n",
+  "README.md": "# Exported PARTICLE WIZARD Project\n\nRun `pnpm install` and `pnpm dev`.\n",
   "package.json": JSON.stringify(
     {
-      name: "vibeviz-export",
+      name: "particle-wizard-export",
       private: true,
       scripts: {
-        dev: "echo 'Project exported from VibeViz'"
+        dev: "echo 'Project exported from PARTICLE WIZARD'"
       }
     },
     null,
@@ -45,7 +45,7 @@ export class Exporter {
   <head>
     <meta charset=\"utf-8\" />
     <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
-    <title>VibeViz Embed</title>
+    <title>PARTICLE WIZARD Embed</title>
     <style>html,body{margin:0;height:100%;background:#08090f;color:#fff;font-family:ui-sans-serif}pre{padding:12px;white-space:pre-wrap;}</style>
   </head>
   <body>

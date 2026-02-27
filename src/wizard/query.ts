@@ -30,9 +30,10 @@ const parseHexColor = (params: URLSearchParams, key: string): string | undefined
 export const parseWizardQuery = (search = window.location.search): WizardQueryConfig => {
   const params = new URLSearchParams(search);
   const seed = parseNumber(params, "seed") ?? 1337;
+  const debugRaw = params.get("debug");
   return {
     testMode: params.get("testMode") === "1",
-    debug: params.get("debug") === "1",
+    debug: debugRaw === null ? true : debugRaw !== "0",
     seed,
     fixedTimeSec: parseNumber(params, "t"),
     width: parseNumber(params, "width"),

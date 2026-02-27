@@ -1,4 +1,4 @@
-import { smoothBass } from "./math";
+import { clamp, smoothBass } from "./math";
 
 export type MicStatus = "idle" | "active" | "denied" | "unsupported" | "error";
 
@@ -10,6 +10,7 @@ export class MicAnalyzer {
   private bass = 0;
   private enabled = false;
   private status: MicStatus = "idle";
+  private sensitivity = 1.6;
 
   constructor(testMode: boolean) {
     this.testMode = testMode;
@@ -43,6 +44,8 @@ export class MicAnalyzer {
         window.AudioContext ||
         (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
       if (!ContextCtor) {
+        this.stream?.getTracks().forEach((track) => track.stop());
+        this.stream = undefined;
         this.status = "unsupported";
         return this.status;
       }
@@ -57,10 +60,23 @@ export class MicAnalyzer {
       this.status = "active";
       return this.status;
     } catch {
+      this.stop();
       this.enabled = false;
       this.status = "denied";
       return this.status;
     }
+  }
+
+  stop(): void {
+    this.stream?.getTracks().forEach((track) => track.stop());
+    this.stream = undefined;
+    this.analyser?.disconnect();
+    this.analyser = undefined;
+    void this.context?.close();
+    this.context = undefined;
+    this.enabled = false;
+    this.status = "idle";
+    this.bass = 0;
   }
 
   getStatus(): MicStatus {
@@ -71,20 +87,28 @@ export class MicAnalyzer {
     return this.enabled;
   }
 
+  setSensitivity(value: number): void {
+    this.sensitivity = clamp(value, 0, 3);
+  }
+
+  getSensitivity(): number {
+    return this.sensitivity;
+  }
+
   update(dt: number, time: number): number {
     if (this.testMode) {
       if (!this.enabled) {
         this.bass *= 0.94;
-        return this.bass * 1.6;
+        return this.bass * this.sensitivity;
       }
       const raw = (Math.sin((time + dt) * 2.3) + 1) / 2;
       this.bass = smoothBass(this.bass, raw);
-      return this.bass * 1.6;
+      return this.bass * this.sensitivity;
     }
 
     if (!this.enabled || !this.analyser) {
       this.bass *= 0.94;
-      return this.bass * 1.6;
+      return this.bass * this.sensitivity;
     }
 
     const buffer = new Uint8Array(this.analyser.frequencyBinCount);
@@ -97,18 +121,10 @@ export class MicAnalyzer {
     }
     const rawBass = lowBandCount === 0 ? 0 : lowSum / lowBandCount / 255;
     this.bass = smoothBass(this.bass, rawBass);
-    return this.bass * 1.6;
+    return this.bass * this.sensitivity;
   }
 
   dispose(): void {
-    this.stream?.getTracks().forEach((track) => track.stop());
-    this.stream = undefined;
-    this.analyser?.disconnect();
-    this.analyser = undefined;
-    void this.context?.close();
-    this.context = undefined;
-    this.enabled = false;
-    this.status = "idle";
-    this.bass = 0;
+    this.stop();
   }
 }
