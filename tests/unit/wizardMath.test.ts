@@ -368,6 +368,24 @@ describe("wizard math helpers", () => {
     }
   });
 
+  it("uses index 0 anchor when index 9 is placeholder data", () => {
+    const candidate = createPalmCandidate({
+      candidateX: 0.11,
+      explicitX: 0.11,
+      displayXAnchorX: 0.78,
+      includePalmMcp: false
+    });
+
+    const assignment = resolvePalmAssignment([candidate]);
+
+    expect(assignment.mode).toBe("single");
+    if (assignment.mode === "single") {
+      expect(assignment.single.x).toBeCloseTo(0.78, 5);
+      expect(assignment.single.y).toBeCloseTo(0.5, 5);
+      expect(assignment.single.z).toBeCloseTo(0, 5);
+    }
+  });
+
   it("uses mirror-sorted boundary values when >2 candidates are present", () => {
     const leftMost = createPalmCandidate({ candidateX: 0.2 });
     const middle = createPalmCandidate({ candidateX: 0.52, displayXAnchorX: 0.55 });

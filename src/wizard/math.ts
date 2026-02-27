@@ -513,20 +513,41 @@ export const smoothBass = (previous: number, raw: number): number => {
 };
 
 export const resolvePalmAssignment = (candidates: PalmCandidate[]): PalmAssignment => {
+  const LANDMARK_PLACEHOLDER_EPSILON = 1e-6;
+
+  const isFiniteVec3 = (value: Vec3 | undefined): value is Vec3 => {
+    if (!value) {
+      return false;
+    }
+    return Number.isFinite(value.x) && Number.isFinite(value.y) && Number.isFinite(value.z);
+  };
+
+  const isPlaceholderLandmark = (value: Vec3): boolean =>
+    Math.abs(value.x - 0.5) <= LANDMARK_PLACEHOLDER_EPSILON &&
+    Math.abs(value.y - 0.5) <= LANDMARK_PLACEHOLDER_EPSILON &&
+    Math.abs(value.z) <= LANDMARK_PLACEHOLDER_EPSILON;
+
+  const toVec3 = (value: Vec3): Vec3 => ({
+    x: value.x,
+    y: value.y,
+    z: value.z
+  });
+
   const anchorPoint = (candidate: PalmCandidate): Vec3 => {
-    const source = candidate.landmarks?.[9] ?? candidate.landmarks?.[0];
-    if (!source) {
-      return {
-        x: candidate.x,
-        y: candidate.y,
-        z: candidate.z
-      };
+    const palmMcp = candidate.landmarks?.[9];
+    if (isFiniteVec3(palmMcp) && !isPlaceholderLandmark(palmMcp)) {
+      return toVec3(palmMcp);
+    }
+
+    const wrist = candidate.landmarks?.[0];
+    if (isFiniteVec3(wrist) && !isPlaceholderLandmark(wrist)) {
+      return toVec3(wrist);
     }
 
     return {
-      x: source.x,
-      y: source.y,
-      z: source.z
+      x: candidate.x,
+      y: candidate.y,
+      z: candidate.z
     };
   };
 
