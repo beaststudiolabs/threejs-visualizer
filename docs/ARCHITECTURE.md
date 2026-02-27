@@ -42,9 +42,10 @@
 ## MediaPipe Asset Boot Strategy
 
 - Local files in `public/mediapipe/*` are primary source:
-  - `vision_bundle.js`
+  - `vision_bundle.mjs`
   - `wasm/*`
   - `hand_landmarker.task`
+- Pinned local/remote tasks package version: `@mediapipe/tasks-vision@0.10.32`.
 - Runtime is local-first with automatic remote fallback enabled by default.
 - Tracker query diagnostics and overrides:
   - `tracker=local` forces strict local-only asset loading (no remote fallback)

@@ -1,13 +1,11 @@
-const LOCAL_VISION_BUNDLE_URL = "/mediapipe/vision_bundle.js";
+const LOCAL_VISION_BUNDLE_URL = "/mediapipe/vision_bundle.mjs";
 const LOCAL_VISION_WASM_ROOT = "/mediapipe/wasm";
 const LOCAL_HAND_LANDMARKER_MODEL_URL = "/mediapipe/hand_landmarker.task";
 
-const REMOTE_VISION_BUNDLE_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.js";
-const REMOTE_VISION_WASM_ROOT = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
+const REMOTE_VISION_BUNDLE_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.32/vision_bundle.mjs";
+const REMOTE_VISION_WASM_ROOT = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.32/wasm";
 const REMOTE_HAND_LANDMARKER_MODEL_URL =
-  "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
-
-const scriptLoadCache = new Map<string, Promise<void>>();
+  "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task";
 
 export type LegacyLandmark = {
   x: number;
@@ -103,12 +101,6 @@ type TasksVisionApi = {
   };
 };
 
-declare global {
-  interface Window {
-    vision?: TasksVisionApi;
-  }
-}
-
 type ResolvedAssetConfig = {
   scriptUrl: string;
   wasmRoot: string;
@@ -188,58 +180,19 @@ const mapTasksResults = (results: TasksResult): LegacyHandsResults => {
   };
 };
 
-const loadScriptOnce = (src: string): Promise<void> => {
-  const cached = scriptLoadCache.get(src);
-  if (cached) {
-    return cached;
-  }
-
-  const promise = new Promise<void>((resolve, reject) => {
-    const existing = document.querySelector<HTMLScriptElement>(`script[data-src="${src}"]`);
-    if (existing) {
-      if (existing.dataset.loaded === "1") {
-        resolve();
-      } else {
-        existing.addEventListener("load", () => resolve(), { once: true });
-        existing.addEventListener("error", () => reject(new Error(`Failed loading ${src}`)), { once: true });
-      }
-      return;
-    }
-
-    const script = document.createElement("script");
-    script.src = src;
-    script.async = true;
-    script.crossOrigin = "anonymous";
-    script.dataset.src = src;
-    script.addEventListener(
-      "load",
-      () => {
-        script.dataset.loaded = "1";
-        resolve();
-      },
-      { once: true }
-    );
-    script.addEventListener("error", () => reject(new Error(`Failed loading ${src}`)), { once: true });
-    document.head.appendChild(script);
-  });
-
-  scriptLoadCache.set(src, promise);
-  return promise;
-};
-
 const loadTasksVisionApi = async (scriptUrl: string): Promise<TasksVisionApi | null> => {
   try {
-    await loadScriptOnce(scriptUrl);
+    const module = (await import(/* @vite-ignore */ scriptUrl)) as Partial<TasksVisionApi>;
+    if (!module.FilesetResolver || !module.HandLandmarker) {
+      return null;
+    }
+    return {
+      FilesetResolver: module.FilesetResolver,
+      HandLandmarker: module.HandLandmarker
+    };
   } catch {
     return null;
   }
-
-  const api = window.vision;
-  if (!api?.FilesetResolver || !api.HandLandmarker) {
-    return null;
-  }
-
-  return api;
 };
 
 const tryPreflight = async (api: TasksVisionApi, assets: ResolvedAssetConfig): Promise<"ok" | "assets" | "model"> => {

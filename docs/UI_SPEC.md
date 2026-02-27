@@ -20,7 +20,8 @@ The active root experience is the Particle Wizard HUD (not the legacy dock layou
 - The calibration marker is two fist outlines (left/right), positioned near webcam center.
 - Tracked hands render a green skeleton stick overlay in mirrored webcam space for both left and right palms when landmarks are available.
 - Tracking backend uses MediaPipe Tasks Vision (GPU-preferred, CPU fallback) through the wizard adapter layer.
-- Local asset strategy is primary (`/public/mediapipe/*`) with automatic remote fallback in default mode.
+- Local committed MediaPipe assets in `/public/mediapipe/*` are primary, pinned to `@mediapipe/tasks-vision@0.10.32`.
+- Default mode keeps automatic remote fallback if local files are missing/corrupted.
 - Webcam panel visibility follows camera stream availability, not tracker availability.
 - If tracker bootstrap fails but camera stream is active, webcam stays visible and status reports tracker unavailability.
 - Target checks use mirrored display space (`displayX = 1 - rawX`) so guidance matches the mirrored webcam.
