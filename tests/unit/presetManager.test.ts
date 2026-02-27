@@ -30,7 +30,7 @@ describe("PresetManager", () => {
   });
 
   it("roundtrips save and load", () => {
-    const manager = new PresetManager("test-presets");
+    const manager = new PresetManager("test-presets", { seedFactoryPresets: false });
     const preset = makePreset("alpha");
 
     manager.save(preset);
@@ -40,7 +40,7 @@ describe("PresetManager", () => {
   });
 
   it("imports and exports JSON", () => {
-    const manager = new PresetManager("test-presets");
+    const manager = new PresetManager("test-presets", { seedFactoryPresets: false });
     const preset = makePreset("beta");
 
     const json = JSON.stringify(preset);
@@ -48,5 +48,22 @@ describe("PresetManager", () => {
 
     const exported = manager.export("beta");
     expect(JSON.parse(exported).name).toBe("beta");
+  });
+
+  it("seeds factory presets once and keeps custom presets", () => {
+    const manager = new PresetManager("test-presets");
+    const seeded = manager.list();
+
+    expect(seeded.length).toBe(30);
+
+    manager.save(makePreset("custom"));
+    const withCustom = manager.list();
+    expect(withCustom.length).toBe(31);
+    expect(withCustom.some((preset) => preset.name === "custom")).toBe(true);
+
+    const reopened = new PresetManager("test-presets");
+    const reopenedList = reopened.list();
+    expect(reopenedList.length).toBe(31);
+    expect(reopenedList.filter((preset) => preset.name === "custom")).toHaveLength(1);
   });
 });

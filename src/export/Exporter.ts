@@ -1,4 +1,4 @@
-﻿import { strToU8, zipSync } from "fflate";
+import { strToU8, zipSync } from "fflate";
 import type { PresetV1 } from "../contracts/types";
 
 const TEMPLATE_FILES: Record<string, string> = {
@@ -34,7 +34,7 @@ export class Exporter {
     const zipped = zipSync(payload, { level: 6 });
     return {
       files: Object.keys(payload),
-      blob: new Blob([Uint8Array.from(zipped).buffer], { type: "application/zip" })
+      blob: new Blob([new Uint8Array(zipped)], { type: "application/zip" })
     };
   }
 
@@ -43,13 +43,13 @@ export class Exporter {
     return `<!doctype html>
 <html>
   <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta charset=\"utf-8\" />
+    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
     <title>VibeViz Embed</title>
     <style>html,body{margin:0;height:100%;background:#08090f;color:#fff;font-family:ui-sans-serif}pre{padding:12px;white-space:pre-wrap;}</style>
   </head>
   <body>
-    <pre id="payload"></pre>
+    <pre id=\"payload\"></pre>
     <script>
       const preset = ${payload};
       document.getElementById('payload').textContent = JSON.stringify(preset, null, 2);
@@ -58,8 +58,3 @@ export class Exporter {
 </html>`;
   }
 }
-
-
-
-
-

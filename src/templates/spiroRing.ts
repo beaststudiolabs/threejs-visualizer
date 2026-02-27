@@ -1,6 +1,9 @@
 import type { TemplateContext, TemplateRuntime, VisualizerTemplate } from "../contracts/schema";
 import type { ParamSchema } from "../contracts/types";
 import * as THREE from "three";
+import { applyRadialGradientToGeometry, createGradientParamSchema } from "./gradient";
+
+const SPIRO_GRADIENT_DEFAULTS = ["#ffaf45", "#ff5e7d", "#a674ff", "#57ccff", "#43ffd0"] as const;
 
 class SpiroRingTemplate implements VisualizerTemplate {
   readonly id = "spiroRing" as const;
@@ -41,13 +44,7 @@ class SpiroRingTemplate implements VisualizerTemplate {
         step: 1,
         default: 7
       },
-      {
-        key: "color",
-        type: "color",
-        label: "Line Color",
-        group: "Style",
-        default: "#ffaf45"
-      }
+      ...createGradientParamSchema(SPIRO_GRADIENT_DEFAULTS, "Style")
     ];
   }
 
@@ -56,7 +53,12 @@ class SpiroRingTemplate implements VisualizerTemplate {
       radius: 1.8,
       detail: 240,
       twist: 7,
-      color: "#ffaf45"
+      gradientStops: 2,
+      color: SPIRO_GRADIENT_DEFAULTS[0],
+      color2: SPIRO_GRADIENT_DEFAULTS[1],
+      color3: SPIRO_GRADIENT_DEFAULTS[2],
+      color4: SPIRO_GRADIENT_DEFAULTS[3],
+      color5: SPIRO_GRADIENT_DEFAULTS[4]
     };
   }
 
@@ -71,7 +73,8 @@ class SpiroRingTemplate implements VisualizerTemplate {
     );
 
     const geometry = new THREE.BufferGeometry().setFromPoints(points);
-    const material = new THREE.LineBasicMaterial({ color: String(params.color ?? "#ffaf45") });
+    applyRadialGradientToGeometry(geometry, params, SPIRO_GRADIENT_DEFAULTS);
+    const material = new THREE.LineBasicMaterial({ color: "#ffffff", vertexColors: true });
     this.line = new THREE.LineLoop(geometry, material);
     ctx.scene.add(this.line);
   }
@@ -82,12 +85,12 @@ class SpiroRingTemplate implements VisualizerTemplate {
     const radius = Number(runtime.params.radius ?? 1.8);
     const detail = Math.max(64, Math.floor(Number(runtime.params.detail ?? 240)));
     const twist = Number(runtime.params.twist ?? 7);
-    const color = String(runtime.params.color ?? "#ffaf45");
 
     const points = this.createPoints(radius, detail, twist, runtime.loopT + runtime.seed * 0.0001);
+    const nextGeometry = new THREE.BufferGeometry().setFromPoints(points);
+    applyRadialGradientToGeometry(nextGeometry, runtime.params, SPIRO_GRADIENT_DEFAULTS);
     this.line.geometry.dispose();
-    this.line.geometry = new THREE.BufferGeometry().setFromPoints(points);
-    (this.line.material as THREE.LineBasicMaterial).color.set(color);
+    this.line.geometry = nextGeometry;
     this.line.rotation.z = runtime.loopT * Math.PI * 2;
   }
 

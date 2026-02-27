@@ -1,12 +1,12 @@
 import { expect, test } from "@playwright/test";
 
-test("export: zip click triggers download", async ({ page }) => {
-  await page.goto("/");
+test("wizard controls: transform cycles mode and mic can activate", async ({ page }) => {
+  await page.goto("/?testMode=1", { waitUntil: "domcontentloaded" });
 
-  const [download] = await Promise.all([
-    page.waitForEvent("download"),
-    page.getByTestId("export-zip").click()
-  ]);
+  await expect(page.getByTestId("mode-value")).toHaveText("SPHERICAL");
+  await page.getByTestId("transform-btn").click();
+  await expect(page.getByTestId("mode-value")).toHaveText("MOBIUS");
 
-  expect(download.suggestedFilename()).toContain(".zip");
+  await page.getByTestId("mic-btn").click();
+  await expect(page.getByTestId("mic-btn")).toHaveAttribute("data-mic-status", "active");
 });

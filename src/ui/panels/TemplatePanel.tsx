@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { VisualizerTemplate } from "../../contracts/schema";
 import type { TemplateId } from "../../contracts/types";
 
@@ -7,7 +8,10 @@ type TemplatePanelProps = {
   seed: number;
   onTemplateChange: (id: TemplateId) => void;
   onSeedChange: (seed: number) => void;
-  onModelUpload: (file: File) => void;
+  onModelLoad: (file: File) => void;
+  loadedModelName?: string;
+  modelLoading: boolean;
+  modelError?: string;
 };
 
 export const TemplatePanel = ({
@@ -16,8 +20,13 @@ export const TemplatePanel = ({
   seed,
   onTemplateChange,
   onSeedChange,
-  onModelUpload
+  onModelLoad,
+  loadedModelName,
+  modelLoading,
+  modelError
 }: TemplatePanelProps): JSX.Element => {
+  const [selectedModelFile, setSelectedModelFile] = useState<File | undefined>(undefined);
+
   return (
     <section className="panel" data-testid="panel-template">
       <h3>Template</h3>
@@ -54,12 +63,30 @@ export const TemplatePanel = ({
           onChange={(event) => {
             const file = event.target.files?.[0];
             if (file) {
-              onModelUpload(file);
+              setSelectedModelFile(file);
             }
           }}
           data-testid="model-upload"
         />
       </label>
+
+      <div className="button-row">
+        <button
+          type="button"
+          disabled={!selectedModelFile || modelLoading}
+          onClick={() => {
+            if (!selectedModelFile) return;
+            onModelLoad(selectedModelFile);
+          }}
+          data-testid="model-load"
+        >
+          {modelLoading ? "Loading..." : loadedModelName ? "Reload Model" : "Load Model"}
+        </button>
+      </div>
+
+      <p className="telemetry">Selected: {selectedModelFile?.name ?? "None"}</p>
+      <p className="telemetry">Loaded: {loadedModelName ?? "None"}</p>
+      {modelError ? <p className="telemetry">Model Error: {modelError}</p> : null}
     </section>
   );
 };

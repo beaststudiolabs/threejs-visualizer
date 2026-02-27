@@ -1,4 +1,4 @@
-﻿# VibeViz Implementation Stages
+# VibeViz Implementation Stages
 
 This file is the canonical staged execution checklist for the project.
 All agents must update stage and step status here as work progresses.
@@ -9,7 +9,7 @@ All agents must update stage and step status here as work progresses.
 - [x] Add root configs (`package.json`, TS/Vite/Vitest/Playwright, ESLint, Prettier)
 - [x] Add governance docs and bind to root `SKILL.md`
 - [x] Add frozen contracts in `src/contracts/types.ts` and `src/contracts/schema.ts`
-- [x] Run `pnpm verify` baseline
+- [ ] Run `pnpm verify` baseline (blocked: Node/pnpm unavailable in current environment)
 
 ## Stage 1 - Core Runtime and Layout Shell
 
@@ -24,7 +24,7 @@ All agents must update stage and step status here as work progresses.
 - [x] Implement model-oriented templates: `modelEdges`, `modelVertexGlow`
 - [x] Implement `TemplateRegistry`
 - [x] Implement preset storage/import/export and migrations scaffold
-- [x] Run visual snapshots for 3 templates with fixed seed/time
+- [ ] Run visual snapshots for 3 templates with fixed seed/time (missing snapshot baselines / one timeout case)
 - [x] Run preset roundtrip tests
 
 ## Stage 3 - Audio and Modulation Core
@@ -39,16 +39,23 @@ All agents must update stage and step status here as work progresses.
 - [x] Implement `MidiEngine` with mock injection
 - [x] Implement `WebcamEngine` with mock intensity path
 - [x] Implement `ModelEngine` GLB loading/centering/scaling
-- [ ] Verify e2e behavior for mock MIDI/Webcam/model upload (follow-up: add dedicated e2e for model-upload path)
+- [x] Add explicit GLB load/reload button and preview refresh flow
+- [x] Sanitize GLB imports to mesh-only + texture-free materials
+- [x] Add per-parameter MIDI/Webcam/Audio control toggles with auto-modulator IDs
+- [x] Extend modulation runtime for non-number params (boolean/select/color)
+- [ ] Verify e2e behavior for mock MIDI/Webcam/model upload (model upload scenario not yet covered by Playwright fixture)
 
 ## Stage 5 - Export, CI, and Closure
 
 - [x] Implement zip/export embed pipeline (`src/export/Exporter.ts`)
 - [x] Add CI workflow (`.github/workflows/ci.yml`)
 - [x] Add unit/e2e/visual test scaffolding
-- [x] Pass full clean-clone `pnpm verify` in CI/local
+- [x] Add 30 factory presets with seeding bootstrap
+- [x] Add 2-5 radial gradient support across all templates
+- [ ] Pass full clean-clone `pnpm verify` in CI/local (blocked: runtime tooling unavailable)
 
 ## Active Blockers
 
-- No hard blocker for local verification; `pnpm verify` passes in this environment.
-- Follow-up hardening item: add explicit e2e coverage for model upload + mock MIDI/Webcam interaction path in one scenario.
+- `npm run lint` currently fails due broad pre-existing `no-undef` ESLint environment configuration across browser/Node globals.
+- Playwright visual snapshot baselines are not committed, so `tests/e2e/visualSnapshots.spec.ts` fails by writing new snapshots.
+- One visual snapshot case (`pointCloudOrb`) currently times out in screenshot stabilization under test runner constraints.

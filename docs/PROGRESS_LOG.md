@@ -74,22 +74,37 @@ Keep entries chronological. Each entry should capture:
 - Blockers:
   - Runtime verification remains pending until Node/pnpm/git are available.
 
-## 2026-02-26 15:19 UTC - Repo Recovery + Full Verification Pass
+## 2026-02-26 17:17 UTC - Feature Expansion: Model Reload, Auto Controls, Gradients, and Factory Presets
 
-- Stage: 0-5 (reconciliation + verification)
+- Stage: 4-5 + docs/tests
 - Completed:
-  - Recovered upstream git continuity by cloning `https://github.com/beaststudiolabs/threejs-visualizer` into `E:\Vibe Projects\threejs-visualizer-upstream` and creating branch `agent/reconcile/local-snapshot`.
-  - Ported local snapshot contents into the upstream clone for reconciliation.
-  - Worked around host git TLS backend issue (`schannel` credential failure) by using OpenSSL-backed git commands for remote operations.
-  - Provisioned pnpm through user-level corepack shim (`.corepack-shims\pnpm.CMD`) and installed dependencies + Playwright Chromium.
-  - Fixed strict TypeScript failures in `MidiEngine`, `RendererCore`/`App` runtime typing, and `Exporter` blob typing.
-  - Added missing lint dependency (`@eslint/js`) and corrected ESLint config behavior for TypeScript global symbols.
-  - Stabilized visual regression workflow by switching to direct canvas snapshot matching and generating baseline images.
-  - Fixed `pointCloudOrb` visual-test runtime crash (`RangeError: Invalid array length`) by clamping `wireframeBlob` density to schema bounds and hardening `pointCloudOrb` numeric sanitization.
+  - Added explicit GLB load/reload flow in template panel with selected/loaded status telemetry.
+  - Implemented mesh-only GLB sanitization and texture stripping in `ModelEngine`.
+  - Added per-parameter controller bindings for MIDI/Webcam/Audio (with per-param MIDI CC and per-param audio source).
+  - Introduced deterministic auto-modulator IDs (`auto:<param>:<source>`) and integrated non-number modulation mapping in `ModulatorEngine`.
+  - Added radial gradient system (2-5 stops) to all templates with standardized params (`gradientStops`, `color`..`color5`).
+  - Added 30 factory presets and bootstrap seeding in `PresetManager`.
+  - Updated unit/e2e coverage for gradients, model sanitization, auto modulation mapping, preset seeding, and new UI controls.
+  - Updated architecture/UI docs and implementation stage tracking.
 - Verification:
-  - `pnpm verify` passed end-to-end (`typecheck`, `lint`, `test`, `e2e`, `build`).
-  - Unit tests: 8 files / 12 tests passed.
-  - E2E tests: 6/6 passed, including 3 visual snapshot cases.
-- Blockers / follow-ups:
-  - No hard blockers for local verification.
-  - Remaining follow-up: add dedicated e2e scenario that explicitly validates model upload behavior alongside mock MIDI/Webcam interaction.
+  - `npm run typecheck` passes.
+  - `npm run test -- --run` passes (20 tests).
+  - `npm run build` passes.
+  - `npm run e2e` partially passes: smoke/export/preset tests pass; visual snapshot suite fails due missing baselines and one pointCloud snapshot timeout.
+- Blockers:
+  - Lint baseline still fails due pre-existing global-env ESLint config issues (`no-undef` across browser/Node globals).
+  - Visual snapshot baselines need to be accepted/committed, and pointCloud snapshot stabilization needs follow-up.
+
+## 2026-02-26 17:22 UTC - Draco GLB Decode Support
+
+- Stage: 4 model pipeline
+- Completed:
+  - Added `DRACOLoader` integration in `ModelEngine` and attached it to `GLTFLoader`.
+  - Added local Draco decoder assets to `public/draco/gltf/`:
+    - `draco_decoder.js`
+    - `draco_decoder.wasm`
+    - `draco_wasm_wrapper.js`
+  - Switched from eager decoder preload to lazy decode initialization to avoid Node/jsdom test URL parsing errors.
+- Verification:
+  - `npm run typecheck` passes.
+  - `npm run test -- tests/unit/modelEngine.test.ts --run` passes.

@@ -62,6 +62,129 @@ describe("ModulatorEngine", () => {
     expect((out.gain as number) <= 1).toBe(true);
   });
 
+  it("maps auto bindings for every param type and then applies manual numeric modulation", () => {
+    const engine = new ModulatorEngine();
+    const out = engine.apply(
+      {
+        gain: 0.2,
+        enabled: false,
+        mode: "one",
+        tint: "#101010"
+      },
+      runtime,
+      [
+        {
+          id: "auto:gain:midi",
+          type: "midiCC",
+          source: "cc:48",
+          targetParam: "gain",
+          amount: 0.3,
+          min: 0,
+          max: 1,
+          curve: "linear",
+          enabled: true
+        },
+        {
+          id: "auto:gain:motion",
+          type: "motion",
+          targetParam: "gain",
+          amount: 0.4,
+          min: 0,
+          max: 1,
+          curve: "linear",
+          enabled: true
+        },
+        {
+          id: "auto:enabled:audio",
+          type: "audioBand",
+          source: "rms",
+          targetParam: "enabled",
+          amount: 1,
+          min: 0,
+          max: 1,
+          curve: "linear",
+          enabled: true
+        },
+        {
+          id: "auto:mode:motion",
+          type: "motion",
+          targetParam: "mode",
+          amount: 1,
+          min: 0,
+          max: 1,
+          curve: "linear",
+          enabled: true
+        },
+        {
+          id: "auto:tint:audio",
+          type: "audioBand",
+          source: "highs",
+          targetParam: "tint",
+          amount: 1,
+          min: 0,
+          max: 1,
+          curve: "linear",
+          enabled: true
+        },
+        {
+          id: "manual-gain",
+          type: "midiCC",
+          source: "cc:48",
+          targetParam: "gain",
+          amount: 0.5,
+          min: 0,
+          max: 10,
+          curve: "linear",
+          enabled: true
+        }
+      ],
+      [
+        {
+          key: "gain",
+          type: "number",
+          label: "Gain",
+          group: "Main",
+          min: 0,
+          max: 10,
+          default: 0
+        },
+        {
+          key: "enabled",
+          type: "boolean",
+          label: "Enabled",
+          group: "Main",
+          default: false
+        },
+        {
+          key: "mode",
+          type: "select",
+          label: "Mode",
+          group: "Main",
+          default: "one",
+          options: [
+            { label: "One", value: "one" },
+            { label: "Two", value: "two" },
+            { label: "Three", value: "three" }
+          ]
+        },
+        {
+          key: "tint",
+          type: "color",
+          label: "Tint",
+          group: "Main",
+          default: "#101010"
+        }
+      ]
+    );
+
+    expect(out.gain).toBeCloseTo(8.5, 4);
+    expect(out.enabled).toBe(true);
+    expect(out.mode).toBe("three");
+    expect(typeof out.tint).toBe("string");
+    expect((out.tint as string).startsWith("#")).toBe(true);
+    expect(out.tint).not.toBe("#101010");
+  });
+
   it("skips non-numeric params", () => {
     const engine = new ModulatorEngine();
     const out = engine.apply(

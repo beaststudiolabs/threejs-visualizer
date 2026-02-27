@@ -1,10 +1,19 @@
 import { expect, test } from "@playwright/test";
 
-test("preset roundtrip: save and load preset", async ({ page }) => {
-  await page.goto("/");
+test("wizard toggles: flow and trails update HUD state", async ({ page }) => {
+  await page.goto("/?testMode=1", { waitUntil: "domcontentloaded" });
 
-  await page.fill("#preset-name", "e2e-sample");
-  await page.getByTestId("preset-save").click();
+  const flowButton = page.getByTestId("flow-btn");
+  const trailsButton = page.getByTestId("trails-btn");
 
-  await expect(page.getByTestId("preset-list")).toContainText("e2e-sample");
+  await expect(flowButton).toHaveAttribute("data-active", "true");
+  await expect(trailsButton).toHaveAttribute("data-active", "true");
+  await expect(page.getByTestId("trails-value")).toHaveText("ACTIVE");
+
+  await flowButton.click();
+  await trailsButton.click();
+
+  await expect(flowButton).toHaveAttribute("data-active", "false");
+  await expect(trailsButton).toHaveAttribute("data-active", "false");
+  await expect(page.getByTestId("trails-value")).toHaveText("OFF");
 });

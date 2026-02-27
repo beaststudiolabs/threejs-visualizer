@@ -1,4 +1,4 @@
-﻿import type { MidiState } from "../contracts/types";
+import type { MidiState } from "../contracts/types";
 
 export class MidiEngine {
   private state: MidiState = {
@@ -50,9 +50,7 @@ export class MidiEngine {
     this.state.last = { cc, value: normalized, ts };
   }
 
-  private handleMidiMessage(data: Uint8Array | null): void {
-    if (!data) return;
-
+  private handleMidiMessage(data: Uint8Array): void {
     const [status, data1, data2] = data;
     const isCc = (status & 0xf0) === 0xb0;
     if (!isCc) return;
