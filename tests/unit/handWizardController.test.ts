@@ -195,10 +195,10 @@ describe("HandWizardController calibration overlay telemetry", () => {
     const controller = new HandWizardController({ testMode: false, video: document.createElement("video") });
 
     for (let i = 0; i < 76; i += 1) {
-      pushResults(controller, createDualResults(0.35, 0.5, 0.65, 0.5));
+      pushResults(controller, createDualResults(LEFT_TARGET_RAW_X, 0.5, RIGHT_TARGET_RAW_X, 0.5));
     }
 
-    pushResults(controller, createDualResults(0.62, 0.5, 0.45, 0.5));
+    pushResults(controller, createDualResults(0.68, 0.5, 0.32, 0.5));
     const leftOffset = controller.getLeftOffset();
     const rightOffset = controller.getRightOffset();
     const leftScale = controller.getLeftScale();

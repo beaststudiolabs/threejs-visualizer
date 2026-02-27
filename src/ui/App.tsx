@@ -479,14 +479,27 @@ export const App = (): JSX.Element => {
               data-testid="primary-color-input"
               type="color"
               value={palette.primary}
+              onInput={handlePaletteChange("primary")}
               onChange={handlePaletteChange("primary")}
             />
 
             <label htmlFor="palette-secondary">Secondary</label>
-            <input id="palette-secondary" type="color" value={palette.secondary} onChange={handlePaletteChange("secondary")} />
+            <input
+              id="palette-secondary"
+              type="color"
+              value={palette.secondary}
+              onInput={handlePaletteChange("secondary")}
+              onChange={handlePaletteChange("secondary")}
+            />
 
             <label htmlFor="palette-accent">Accent</label>
-            <input id="palette-accent" type="color" value={palette.accent} onChange={handlePaletteChange("accent")} />
+            <input
+              id="palette-accent"
+              type="color"
+              value={palette.accent}
+              onInput={handlePaletteChange("accent")}
+              onChange={handlePaletteChange("accent")}
+            />
 
             <label htmlFor="bloom-strength">Bloom Strength</label>
             <input
@@ -649,6 +662,7 @@ export const App = (): JSX.Element => {
               max={3}
               step={0.05}
               value={hud.micSensitivity}
+              onInput={handleMicSensitivityChange}
               onChange={handleMicSensitivityChange}
             />
             <span>{hud.micSensitivity.toFixed(2)}</span>

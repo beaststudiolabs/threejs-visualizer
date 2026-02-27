@@ -6,6 +6,7 @@ export class MicAnalyzer {
   private readonly testMode: boolean;
   private context?: AudioContext;
   private analyser?: AnalyserNode;
+  private frequencyBuffer?: Uint8Array<ArrayBuffer>;
   private stream?: MediaStream;
   private bass = 0;
   private enabled = false;
@@ -54,6 +55,7 @@ export class MicAnalyzer {
       this.analyser = this.context.createAnalyser();
       this.analyser.fftSize = 256;
       this.analyser.smoothingTimeConstant = 0.75;
+      this.frequencyBuffer = new Uint8Array(new ArrayBuffer(this.analyser.frequencyBinCount));
       source.connect(this.analyser);
 
       this.enabled = true;
@@ -72,6 +74,7 @@ export class MicAnalyzer {
     this.stream = undefined;
     this.analyser?.disconnect();
     this.analyser = undefined;
+    this.frequencyBuffer = undefined;
     void this.context?.close();
     this.context = undefined;
     this.enabled = false;
@@ -111,7 +114,11 @@ export class MicAnalyzer {
       return this.bass * this.sensitivity;
     }
 
-    const buffer = new Uint8Array(this.analyser.frequencyBinCount);
+    let buffer = this.frequencyBuffer;
+    if (!buffer || buffer.length !== this.analyser.frequencyBinCount) {
+      buffer = new Uint8Array(new ArrayBuffer(this.analyser.frequencyBinCount));
+      this.frequencyBuffer = buffer;
+    }
     this.analyser.getByteFrequencyData(buffer);
     const lowBandCount = Math.min(12, buffer.length);
 

@@ -302,6 +302,10 @@ export const resolvePalmAssignment = (candidates: PalmCandidate[]): PalmAssignme
     };
   }
 
+  const sortedForMirroredDisplay = [...candidates].sort((a, b) => b.x - a.x);
+  const leftFallback = sortedForMirroredDisplay[0];
+  const rightFallback = sortedForMirroredDisplay[sortedForMirroredDisplay.length - 1];
+
   const leftLabeled = candidates.find((candidate) => candidate.label?.toLowerCase() === "left");
   const rightLabeled = candidates.find((candidate) => candidate.label?.toLowerCase() === "right");
 
@@ -328,25 +332,24 @@ export const resolvePalmAssignment = (candidates: PalmCandidate[]): PalmAssignme
     };
   }
 
-  const sorted = [...candidates].sort((a, b) => a.x - b.x);
   return {
     mode: "dual",
     source: "sorted",
     left: {
-      x: sorted[0].x,
-      y: sorted[0].y,
-      z: sorted[0].z,
-      thumbTip: sorted[0].thumbTip,
-      indexTip: sorted[0].indexTip,
-      landmarks: sorted[0].landmarks
+      x: leftFallback.x,
+      y: leftFallback.y,
+      z: leftFallback.z,
+      thumbTip: leftFallback.thumbTip,
+      indexTip: leftFallback.indexTip,
+      landmarks: leftFallback.landmarks
     },
     right: {
-      x: sorted[sorted.length - 1].x,
-      y: sorted[sorted.length - 1].y,
-      z: sorted[sorted.length - 1].z,
-      thumbTip: sorted[sorted.length - 1].thumbTip,
-      indexTip: sorted[sorted.length - 1].indexTip,
-      landmarks: sorted[sorted.length - 1].landmarks
+      x: rightFallback.x,
+      y: rightFallback.y,
+      z: rightFallback.z,
+      thumbTip: rightFallback.thumbTip,
+      indexTip: rightFallback.indexTip,
+      landmarks: rightFallback.landmarks
     }
   };
 };

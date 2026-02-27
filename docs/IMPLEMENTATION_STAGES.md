@@ -18,6 +18,7 @@ All agents must update stage and step status here as work progresses.
 - [x] Add debug overlay wiring (`fps`, `t`, `loopT`, telemetry)
 - [x] Add Particle Wizard fullscreen/hotkey controls and live FPS/particle sliders
 - [x] Run smoke e2e and panel toggle verification
+- [x] Aggressively prune legacy runtime/UI stack so root wizard is the only app path
 
 ## Stage 2 - Templates Pack v1 and Presets
 
@@ -44,6 +45,7 @@ All agents must update stage and step status here as work progresses.
 - [x] Sanitize GLB imports to mesh-only + texture-free materials
 - [x] Replace circular webcam calibration marker with dual left/right palm outlines and per-palm readiness lighting
 - [x] Keep palm outlines faintly visible post-activation and support 1.5s live dual-hand recalibration
+- [x] Migrate hand tracking runtime to MediaPipe Tasks Vision adapter (GPU-preferred with CPU fallback)
 - [x] Add per-parameter MIDI/Webcam/Audio control toggles with auto-modulator IDs
 - [x] Extend modulation runtime for non-number params (boolean/select/color)
 - [ ] Verify e2e behavior for mock MIDI/Webcam/model upload (model upload scenario not yet covered by Playwright fixture)
@@ -59,6 +61,4 @@ All agents must update stage and step status here as work progresses.
 
 ## Active Blockers
 
-- `npm run lint` currently fails due broad pre-existing `no-undef` ESLint environment configuration across browser/Node globals.
-- Playwright visual snapshot baselines are not committed, so `tests/e2e/visualSnapshots.spec.ts` fails by writing new snapshots.
-- One visual snapshot case (`pointCloudOrb`) currently times out in screenshot stabilization under test runner constraints.
+- None.

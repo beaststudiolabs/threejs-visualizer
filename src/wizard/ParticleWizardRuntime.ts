@@ -16,15 +16,13 @@ import { MicAnalyzer, type MicStatus } from "./MicAnalyzer";
 
 export const FPS_CAP_MIN = 60;
 export const FPS_CAP_MAX = 240;
-export const FPS_CAP_DEFAULT = 60;
+export const FPS_CAP_DEFAULT = 144;
 export const PARTICLE_COUNT_MIN = 1_000;
-export const PARTICLE_COUNT_MAX = 100_000;
-export const PARTICLE_COUNT_DEFAULT = 20_000;
+export const PARTICLE_COUNT_MAX = 160_000;
+export const PARTICLE_COUNT_DEFAULT = 50_000;
 
-const DPR_CAP = 1.35;
-const LOW_PERFORMANCE_PARTICLE_FLOOR = 10_000;
-const AUTO_LOW_FPS_THRESHOLD = 38;
-const AUTO_HIGH_FPS_THRESHOLD = 55;
+const DPR_CAP = 2;
+const LOW_PERFORMANCE_PARTICLE_FLOOR = 15_000;
 const MORPH_DURATION_SEC = 1.25;
 
 export const WIZARD_MODE_NAMES = [
@@ -274,7 +272,8 @@ export class ParticleWizardRuntime {
   private lastPointerY = 0;
   private particleRebuildTimer?: number;
   private micLevel = 0;
-  private gestureConfigNoopWarned = false;
+  private readonly leftCenter = new THREE.Vector3();
+  private readonly rightCenter = new THREE.Vector3();
 
   private statusOverride?: StatusOverride;
   private lastHudEmitTime = 0;
@@ -376,7 +375,7 @@ export class ParticleWizardRuntime {
   }
 
   setParticleCount(next: number): void {
-    const floor = this.getEffectivePerformanceMode() === "low" ? LOW_PERFORMANCE_PARTICLE_FLOOR : PARTICLE_COUNT_MIN;
+    const floor = this.performanceMode === "low" ? LOW_PERFORMANCE_PARTICLE_FLOOR : PARTICLE_COUNT_MIN;
     const safeCount = clamp(Math.floor(next), floor, PARTICLE_COUNT_MAX);
     if (safeCount === this.particleCount) {
       return;
@@ -384,15 +383,6 @@ export class ParticleWizardRuntime {
 
     this.particleCount = safeCount;
     this.scheduleParticleRebuild();
-    this.emitHud(true);
-  }
-
-  setGestureConfig(_next?: Partial<Record<string, unknown>>): void {
-    void _next;
-    if (!this.gestureConfigNoopWarned) {
-      console.warn("setGestureConfig is deprecated. Edge-sweep controls are disabled.");
-      this.gestureConfigNoopWarned = true;
-    }
     this.emitHud(true);
   }
 
@@ -424,7 +414,7 @@ export class ParticleWizardRuntime {
 
   private applyParticleBudget(): void {
     const effectiveMode = this.getEffectivePerformanceMode();
-    if (effectiveMode === "low") {
+    if (effectiveMode === "low" && this.performanceMode === "low") {
       const adjustedCount = Math.max(LOW_PERFORMANCE_PARTICLE_FLOOR, this.particleCount);
       if (adjustedCount !== this.particleCount) {
         this.particleCount = adjustedCount;
@@ -601,7 +591,8 @@ export class ParticleWizardRuntime {
 
     const renderer = new THREE.WebGLRenderer({
       canvas: this.config.canvas,
-      antialias: true
+      antialias: true,
+      powerPreference: "high-performance"
     });
     renderer.setPixelRatio(Math.min(DPR_CAP, window.devicePixelRatio || 1));
     renderer.setClearColor(0x000000, 1);
@@ -733,6 +724,7 @@ export class ParticleWizardRuntime {
       uniform vec3 colorAccent;
       uniform float particleGain;
       varying vec3 vColor;
+      varying float vVisible;
 
       float superFormula(float angle, float m, float n1, float n2, float n3, float a, float b) {
         float c = pow(abs(cos(m * angle * 0.25) / a), n2);
@@ -853,8 +845,11 @@ export class ParticleWizardRuntime {
         float rightExclusive = step(splitStart, p3);
         float rightSide = step(0.5, isRight);
         float visible = max(shared, mix(leftExclusive, rightExclusive, rightSide));
+        vVisible = visible;
         if (visible < 0.5) {
-          discard;
+          gl_PointSize = 0.0;
+          gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+          return;
         }
 
         pos.x *= mix(1.0, -1.0, rightSide);
@@ -874,7 +869,11 @@ export class ParticleWizardRuntime {
     const fragmentShader = `
       uniform float bassPump;
       varying vec3 vColor;
+      varying float vVisible;
       void main() {
+        if (vVisible < 0.5) {
+          discard;
+        }
         vec2 c = gl_PointCoord - 0.5;
         float d = length(c);
         if (d > 0.5) {
@@ -1052,9 +1051,9 @@ export class ParticleWizardRuntime {
     const leftFingerSignal = this.handController.getLeftFingerSignal();
     const rightFingerSignal = this.handController.getRightFingerSignal();
 
-    const leftCenter = new THREE.Vector3(-MODEL_SEPARATION, 0, 0).add(new THREE.Vector3(leftHandOffset.x, leftHandOffset.y, leftHandOffset.z));
-    const rightCenter = new THREE.Vector3(MODEL_SEPARATION, 0, 0).add(new THREE.Vector3(rightHandOffset.x, rightHandOffset.y, rightHandOffset.z));
-    const sharedRatio = computeSharedRatio(leftCenter.distanceTo(rightCenter), SHARED_NEAR_DISTANCE, SHARED_FAR_DISTANCE);
+    this.leftCenter.set(-MODEL_SEPARATION + leftHandOffset.x, leftHandOffset.y, leftHandOffset.z);
+    this.rightCenter.set(MODEL_SEPARATION + rightHandOffset.x, rightHandOffset.y, rightHandOffset.z);
+    const sharedRatio = computeSharedRatio(this.leftCenter.distanceTo(this.rightCenter), SHARED_NEAR_DISTANCE, SHARED_FAR_DISTANCE);
 
     this.leftParticleUniforms.handOffset.value.set(leftHandOffset.x, leftHandOffset.y, leftHandOffset.z);
     this.leftParticleUniforms.handScale.value = leftHandScale;
@@ -1097,11 +1096,13 @@ export class ParticleWizardRuntime {
       this.fpsSampleStart = now;
 
       if (this.performanceMode === "auto") {
-        if (this.fps <= AUTO_LOW_FPS_THRESHOLD && this.autoPerformancePreset === "high") {
+        const lowFpsThreshold = 48;
+        const highFpsThreshold = 68;
+        if (this.fps <= lowFpsThreshold && this.autoPerformancePreset === "high") {
           this.autoPerformancePreset = "low";
           this.applyPerformancePreset();
           this.applyParticleBudget();
-        } else if (this.fps >= AUTO_HIGH_FPS_THRESHOLD && this.autoPerformancePreset === "low") {
+        } else if (this.fps >= highFpsThreshold && this.autoPerformancePreset === "low") {
           this.autoPerformancePreset = "high";
           this.applyPerformancePreset();
           this.applyParticleBudget();

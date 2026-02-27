@@ -197,7 +197,7 @@ export class HandWizardController {
 
     try {
       this.stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: 320, height: 240 }
+        video: { width: 640, height: 480 }
       });
       this.video.srcObject = this.stream;
       await this.video.play();
@@ -209,8 +209,8 @@ export class HandWizardController {
       this.hands.setOptions({
         maxNumHands: 2,
         modelComplexity: 1,
-        minDetectionConfidence: 0.65,
-        minTrackingConfidence: 0.55
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.45
       });
 
       this.hands.onResults((results) => {
@@ -223,8 +223,8 @@ export class HandWizardController {
             await this.hands.send({ image: this.video });
           }
         },
-        width: 320,
-        height: 240
+        width: 640,
+        height: 480
       });
 
       await this.cameraRunner.start();

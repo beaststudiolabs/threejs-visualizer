@@ -7,7 +7,14 @@ import prettier from "eslint-config-prettier";
 
 export default [
   {
-    ignores: ["dist/**", "coverage/**", "playwright-report/**", "test-results/**"]
+    ignores: [
+      "dist/**",
+      "coverage/**",
+      "playwright-report/**",
+      "playwright-results/**",
+      "test-results/**",
+      "public/draco/**"
+    ]
   },
   js.configs.recommended,
   {
@@ -28,7 +35,8 @@ export default [
       ...tseslint.configs.recommended.rules,
       ...reactHooks.configs.recommended.rules,
       "react-refresh/only-export-components": ["warn", { allowConstantExport: true }],
-      "@typescript-eslint/no-explicit-any": "off"
+      "@typescript-eslint/no-explicit-any": "off",
+      "no-undef": "off"
     }
   },
   prettier

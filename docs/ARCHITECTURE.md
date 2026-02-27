@@ -8,19 +8,18 @@
   - GLSL particle simulation and morphing across 10 spatial modes
   - Postprocessing chain (`EffectComposer`, bloom, afterimage trails)
   - Optional microphone bass analysis with toggle + sensitivity
-  - Optional legacy MediaPipe hand tracking with calibration and pose mapping
-  - Legacy dock/template modules remain in-repo for compatibility/future reuse, but are not active in the root UI.
+  - MediaPipe Tasks hand tracking with calibration and pose mapping
+  - Single active runtime path only (legacy dock/template stack removed)
 
 ## Runtime Layers
 
-- `src/contracts/*` frozen shared interfaces.
-- `src/core/*` deterministic render/time loop.
-- `src/engines/*` input subsystems (audio/midi/webcam/model), each with mock mode.
-- `src/modulators/*` deterministic signal routing to params.
-- `src/templates/*` visual templates implementing `VisualizerTemplate`.
-- `src/ui/*` React HUD and controls for the active wizard experience.
-- `src/presets/*` persistence and migration.
-- `src/export/*` zip/embed export.
+- `src/ui/App.tsx` React HUD and controls for the active wizard experience.
+- `src/wizard/ParticleWizardRuntime.ts` scene/render loop, shader system, post FX, adaptive performance.
+- `src/wizard/HandWizardController.ts` calibration state machine and hand intent mapping.
+- `src/wizard/legacyMediaPipe.ts` MediaPipe Tasks compatibility adapter.
+- `src/wizard/math.ts` deterministic mapping and calibration helpers.
+- `src/wizard/MicAnalyzer.ts` optional microphone bass pump.
+- `src/utils/rng.ts` deterministic seeded RNG.
 
 ## Camera Input Path
 
@@ -50,5 +49,4 @@
 
 ## Presets
 
-- Preset manager seeds 30 factory presets (6 per template) into local storage when missing.
-- User presets with the same name override factory entries.
+- Factory preset/template export stack was removed as part of aggressive pruning.

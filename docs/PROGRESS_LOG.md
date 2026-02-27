@@ -232,3 +232,35 @@ Keep entries chronological. Each entry should capture:
 - Verification:
   - `npm run typecheck` could not be completed due pre-existing `ParticleWizardRuntime.ts` type regressions in this branch.
   - `npm run test -- --run` / `npm run build` blocked by environment/runtime issues unrelated to this overlay change.
+
+## 2026-02-27 18:10 UTC - Aggressive Prune + Tasks Migration + Runtime Performance Pass
+
+- Stage: root runtime hardening / housekeeping
+- Completed:
+  - Fixed particle shader visibility path in `ParticleWizardRuntime` by moving visibility discard logic out of vertex shader compilation failure path.
+  - Upgraded default runtime profile to high + adaptive:
+    - default FPS cap to `144`
+    - default particle count to `50,000`
+    - adaptive auto-thresholds derived from current FPS cap
+    - renderer `powerPreference: "high-performance"`
+    - reduced per-frame allocations in hot path (reused center vectors)
+  - Optimized mic analyzer frame loop by reusing FFT buffer allocations.
+  - Migrated webcam hand tracking backend from legacy Hands script path to MediaPipe Tasks Vision adapter in `src/wizard/legacyMediaPipe.ts` (GPU preferred, CPU fallback).
+  - Increased camera capture resolution to `640x480` and relaxed tracking confidence defaults for dual-hand stability.
+  - Improved mirrored left/right palm assignment fallback logic in `wizard/math.ts` to avoid role inversion under label inconsistencies.
+  - Per user-selected aggressive prune, removed legacy non-root source trees and non-wizard unit/e2e suites.
+  - Regenerated `tests/e2e/visualSnapshots.spec.ts` baseline for the updated renderer output.
+  - Removed unused runtime dependencies (`fflate`, `zustand`) and updated architecture/UI docs for single-path runtime.
+  - Updated ESLint ignores/rules for generated assets and TypeScript `no-undef` false positives.
+  - Updated `verify` script to use `npm run` chain in this environment.
+  - Removed unused Draco decoder assets from `public/draco/*` after legacy model pipeline prune.
+- Verification:
+  - `npm run typecheck` passes.
+  - `npm run lint` passes.
+  - `npm run build` passes.
+  - `npm run test -- --run` passes (3 files, 17 tests).
+  - `npm run e2e:core` passes (3/3).
+  - `npm run e2e` passes (4/4).
+  - `npm run verify` passes end-to-end.
+- Blockers:
+  - None.

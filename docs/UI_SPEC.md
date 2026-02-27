@@ -18,6 +18,7 @@ The active root experience is the Particle Wizard HUD (not the legacy dock layou
 
 - The calibration marker is two open-palm outlines (left/right), positioned near webcam center.
 - Tracked hands render a green skeleton stick overlay in mirrored webcam space for both left and right palms when landmarks are available.
+- Tracking backend uses MediaPipe Tasks Vision (GPU-preferred, CPU fallback) through the wizard adapter layer.
 - Target checks use mirrored display space (`displayX = 1 - rawX`) so guidance matches the mirrored webcam.
 - Target anchors are intentionally separated (`x≈0.36` left, `x≈0.64` right) to improve hand placement clarity.
 - Left and right outlines light independently when each corresponding palm is inside its target zone.
@@ -68,4 +69,4 @@ These URL params are applied on startup when provided:
 
 ## Legacy Dock UI
 
-Legacy dock/panel modules remain in-repo for compatibility and future reuse, but they are not the active root UI path.
+Legacy dock/panel modules were removed in the prune pass. The wizard HUD is now the only supported UI path.
