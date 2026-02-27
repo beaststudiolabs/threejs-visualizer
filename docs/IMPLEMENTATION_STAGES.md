@@ -17,6 +17,8 @@ All agents must update stage and step status here as work progresses.
 - [x] Implement dock layout shell and panel scaffolding
 - [x] Add debug overlay wiring (`fps`, `t`, `loopT`, telemetry)
 - [x] Add Particle Wizard fullscreen/hotkey controls and live FPS/particle sliders
+- [x] Add bottom `BACKGROUND` control with short-press starfield toggle and long-press color picker
+- [x] Add 11th morph mode `PARTICLE HANDS` with per-finger tracking, single-hand ghosting, and presence smoothing
 - [x] Run smoke e2e and panel toggle verification
 - [x] Aggressively prune legacy runtime/UI stack so root wizard is the only app path
 

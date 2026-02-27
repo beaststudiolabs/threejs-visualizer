@@ -1,6 +1,10 @@
-const VISION_BUNDLE_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.js";
-const VISION_WASM_ROOT = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
-const HAND_LANDMARKER_MODEL_URL =
+const LOCAL_VISION_BUNDLE_URL = "/mediapipe/vision_bundle.js";
+const LOCAL_VISION_WASM_ROOT = "/mediapipe/wasm";
+const LOCAL_HAND_LANDMARKER_MODEL_URL = "/mediapipe/hand_landmarker.task";
+
+const REMOTE_VISION_BUNDLE_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.js";
+const REMOTE_VISION_WASM_ROOT = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
+const REMOTE_HAND_LANDMARKER_MODEL_URL =
   "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
 
 const scriptLoadCache = new Map<string, Promise<void>>();
@@ -42,6 +46,24 @@ export type LegacyCameraConstructor = new (
   video: HTMLVideoElement,
   config: { onFrame: () => Promise<void>; width: number; height: number }
 ) => LegacyCameraInstance;
+
+export type LegacyMediaPipeLoadErrorCode = "assets-load-failed" | "model-load-failed" | "runtime-error" | "disabled";
+
+export type LegacyMediaPipeLoadResult =
+  | {
+      ok: true;
+      Hands: LegacyHandsConstructor;
+      Camera: LegacyCameraConstructor;
+    }
+  | {
+      ok: false;
+      errorCode: LegacyMediaPipeLoadErrorCode;
+    };
+
+export type LegacyMediaPipeLoadOptions = {
+  allowRemoteFallback?: boolean;
+  forceFailure?: boolean;
+};
 
 type HandednessCategory = {
   categoryName?: string;
@@ -87,6 +109,12 @@ declare global {
   }
 }
 
+type ResolvedAssetConfig = {
+  scriptUrl: string;
+  wasmRoot: string;
+  modelPath: string;
+};
+
 const DEFAULT_HAND_OPTIONS: LegacyHandOptions = {
   maxNumHands: 2,
   modelComplexity: 1,
@@ -94,11 +122,29 @@ const DEFAULT_HAND_OPTIONS: LegacyHandOptions = {
   minTrackingConfidence: 0.5
 };
 
+const LOCAL_ASSETS: ResolvedAssetConfig = {
+  scriptUrl: LOCAL_VISION_BUNDLE_URL,
+  wasmRoot: LOCAL_VISION_WASM_ROOT,
+  modelPath: LOCAL_HAND_LANDMARKER_MODEL_URL
+};
+
+const REMOTE_ASSETS: ResolvedAssetConfig = {
+  scriptUrl: REMOTE_VISION_BUNDLE_URL,
+  wasmRoot: REMOTE_VISION_WASM_ROOT,
+  modelPath: REMOTE_HAND_LANDMARKER_MODEL_URL
+};
+
+let activeAssets: ResolvedAssetConfig = LOCAL_ASSETS;
+
 const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
 
-const toTasksOptions = (options: LegacyHandOptions, delegate: "GPU" | "CPU"): TasksOptions => ({
+const toTasksOptions = (
+  options: LegacyHandOptions,
+  modelAssetPath: string,
+  delegate: "GPU" | "CPU"
+): TasksOptions => ({
   baseOptions: {
-    modelAssetPath: HAND_LANDMARKER_MODEL_URL,
+    modelAssetPath,
     delegate
   },
   runningMode: "VIDEO",
@@ -108,10 +154,10 @@ const toTasksOptions = (options: LegacyHandOptions, delegate: "GPU" | "CPU"): Ta
   minTrackingConfidence: clamp(options.minTrackingConfidence, 0, 1)
 });
 
-const normalizeLabel = (categories: HandednessCategory[] | undefined): string | undefined => {
+const normalizeLabel = (categories: HandednessCategory[] | undefined): string => {
   const first = categories?.[0];
   if (!first) {
-    return undefined;
+    return "Unknown";
   }
   const raw = (first.categoryName ?? first.displayName ?? "").toLowerCase();
   if (raw.includes("left")) {
@@ -120,7 +166,7 @@ const normalizeLabel = (categories: HandednessCategory[] | undefined): string | 
   if (raw.includes("right")) {
     return "Right";
   }
-  return undefined;
+  return first.displayName ?? first.categoryName ?? "Unknown";
 };
 
 const mapTasksResults = (results: TasksResult): LegacyHandsResults => {
@@ -132,10 +178,9 @@ const mapTasksResults = (results: TasksResult): LegacyHandsResults => {
     }))
   );
 
-  const multiHandedness = results.handedness
-    ?.map((categories) => normalizeLabel(categories))
-    .filter((label): label is string => Boolean(label))
-    .map((label) => ({ label }));
+  const multiHandedness = results.handedness?.map((categories) => ({
+    label: normalizeLabel(categories)
+  }));
 
   return {
     multiHandLandmarks,
@@ -182,9 +227,9 @@ const loadScriptOnce = (src: string): Promise<void> => {
   return promise;
 };
 
-const loadTasksVisionApi = async (): Promise<TasksVisionApi | null> => {
+const loadTasksVisionApi = async (scriptUrl: string): Promise<TasksVisionApi | null> => {
   try {
-    await loadScriptOnce(VISION_BUNDLE_URL);
+    await loadScriptOnce(scriptUrl);
   } catch {
     return null;
   }
@@ -195,6 +240,31 @@ const loadTasksVisionApi = async (): Promise<TasksVisionApi | null> => {
   }
 
   return api;
+};
+
+const tryPreflight = async (api: TasksVisionApi, assets: ResolvedAssetConfig): Promise<"ok" | "assets" | "model"> => {
+  let vision: unknown;
+  try {
+    vision = await api.FilesetResolver.forVisionTasks(assets.wasmRoot);
+  } catch {
+    return "assets";
+  }
+
+  const preflightOptions = toTasksOptions(DEFAULT_HAND_OPTIONS, assets.modelPath, "GPU");
+  try {
+    const landmarker = await api.HandLandmarker.createFromOptions(vision, preflightOptions);
+    landmarker.close?.();
+    return "ok";
+  } catch {
+    const cpuOptions = toTasksOptions(DEFAULT_HAND_OPTIONS, assets.modelPath, "CPU");
+    try {
+      const cpuLandmarker = await api.HandLandmarker.createFromOptions(vision, cpuOptions);
+      cpuLandmarker.close?.();
+      return "ok";
+    } catch {
+      return "model";
+    }
+  }
 };
 
 class TasksHandsAdapter implements LegacyHandsInstance {
@@ -260,19 +330,29 @@ class TasksHandsAdapter implements LegacyHandsInstance {
   }
 
   private async createLandmarker(): Promise<TasksHandLandmarker | null> {
-    const api = await loadTasksVisionApi();
+    const api = await loadTasksVisionApi(activeAssets.scriptUrl);
     if (!api) {
       return null;
     }
 
-    const vision = await api.FilesetResolver.forVisionTasks(VISION_WASM_ROOT);
-    const highPerfOptions = toTasksOptions(this.options, "GPU");
+    let vision: unknown;
+    try {
+      vision = await api.FilesetResolver.forVisionTasks(activeAssets.wasmRoot);
+    } catch {
+      return null;
+    }
+
+    const highPerfOptions = toTasksOptions(this.options, activeAssets.modelPath, "GPU");
 
     try {
       return await api.HandLandmarker.createFromOptions(vision, highPerfOptions);
     } catch {
-      const cpuOptions = toTasksOptions(this.options, "CPU");
-      return api.HandLandmarker.createFromOptions(vision, cpuOptions);
+      const cpuOptions = toTasksOptions(this.options, activeAssets.modelPath, "CPU");
+      try {
+        return await api.HandLandmarker.createFromOptions(vision, cpuOptions);
+      } catch {
+        return null;
+      }
     }
   }
 }
@@ -325,17 +405,62 @@ class TasksCameraAdapter implements LegacyCameraInstance {
   }
 }
 
-export const loadLegacyMediaPipe = async (): Promise<{
-  Hands: LegacyHandsConstructor;
-  Camera: LegacyCameraConstructor;
-} | null> => {
-  const api = await loadTasksVisionApi();
-  if (!api) {
-    return null;
+export const loadLegacyMediaPipe = async (
+  options: LegacyMediaPipeLoadOptions = {}
+): Promise<LegacyMediaPipeLoadResult> => {
+  if (options.forceFailure) {
+    return {
+      ok: false,
+      errorCode: "runtime-error"
+    };
   }
-  void api;
+
+  const allowRemoteFallback = options.allowRemoteFallback === true;
+
+  let api = await loadTasksVisionApi(LOCAL_ASSETS.scriptUrl);
+  let resolvedAssets = LOCAL_ASSETS;
+
+  if (!api && allowRemoteFallback) {
+    api = await loadTasksVisionApi(REMOTE_ASSETS.scriptUrl);
+    resolvedAssets = REMOTE_ASSETS;
+  }
+
+  if (!api) {
+    return {
+      ok: false,
+      errorCode: "assets-load-failed"
+    };
+  }
+
+  let preflight = await tryPreflight(api, resolvedAssets);
+
+  if (preflight !== "ok" && allowRemoteFallback && resolvedAssets.scriptUrl !== REMOTE_ASSETS.scriptUrl) {
+    const remoteApi = await loadTasksVisionApi(REMOTE_ASSETS.scriptUrl);
+    if (remoteApi) {
+      api = remoteApi;
+      resolvedAssets = REMOTE_ASSETS;
+      preflight = await tryPreflight(api, resolvedAssets);
+    }
+  }
+
+  if (preflight === "assets") {
+    return {
+      ok: false,
+      errorCode: "assets-load-failed"
+    };
+  }
+
+  if (preflight === "model") {
+    return {
+      ok: false,
+      errorCode: "model-load-failed"
+    };
+  }
+
+  activeAssets = resolvedAssets;
 
   return {
+    ok: true,
     Hands: TasksHandsAdapter as unknown as LegacyHandsConstructor,
     Camera: TasksCameraAdapter as unknown as LegacyCameraConstructor
   };

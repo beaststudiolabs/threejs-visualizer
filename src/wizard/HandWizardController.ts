@@ -1,18 +1,24 @@
 import {
+  createZeroFingerCurls,
+  computeFingerCurls,
   evaluateDualPalmTargets,
+  mirrorWebcamX,
   mapLeftHandPose,
   mapRightHandPose,
   mapSingleHandPose,
   resolvePalmAssignment,
   shouldActivateCalibration,
+  smoothFingerCurls,
   smoothHandState,
   updateCalibrationTimer,
+  type FingerCurls,
   type PalmCandidate,
   type Vec3
 } from "./math";
 import {
   loadLegacyMediaPipe,
   type LegacyCameraInstance,
+  type LegacyMediaPipeLoadErrorCode,
   type LegacyHandsInstance,
   type LegacyHandsResults,
   type LegacyLandmark
@@ -21,6 +27,8 @@ import {
 export type HandMode = "dual" | "single" | "none";
 
 export type HandTrackingState = "loading" | "ready" | "calibrating" | "active" | "degraded" | "disabled";
+export type CameraState = "active" | "denied" | "unsupported" | "error";
+export type TrackingStateDetail = LegacyMediaPipeLoadErrorCode;
 
 export type HandDebugPalm = {
   x: number;
@@ -46,6 +54,9 @@ export type HandDebugInfo = {
   mappedScaleRight: number;
   mappedFingerLeft: number;
   mappedFingerRight: number;
+  mappedFingerCurlsLeft: FingerCurls;
+  mappedFingerCurlsRight: FingerCurls;
+  singleRole?: "left" | "right";
   sharedRatio?: number;
   sharedBudget?: number;
   staleMs: number;
@@ -57,6 +68,8 @@ export type HandWizardUiState = {
   wizardActive: boolean;
   statusText: string;
   statusColor: string;
+  cameraState: CameraState;
+  trackingStateDetail?: TrackingStateDetail;
   handMode: HandMode;
   handTrackingState: HandTrackingState;
   debug: HandDebugInfo;
@@ -64,6 +77,7 @@ export type HandWizardUiState = {
 
 type HandWizardControllerConfig = {
   testMode: boolean;
+  trackerMode: "default" | "off" | "mockfail" | "remote";
   video: HTMLVideoElement;
   onStateChange?: (state: HandWizardUiState) => void;
 };
@@ -82,7 +96,10 @@ const ACTIVE_DUAL_STATUS = "WIZARD MODE ACTIVE - Dual-hand sculpting.";
 const ACTIVE_SINGLE_STATUS = "Single-hand fallback active.";
 const WAIT_SINGLE_STATUS = "Single hand seen - hold steady to enter fallback.";
 const DEGRADED_STATUS = "Tracking degraded - keep palms visible.";
-const DISABLED_STATUS = "Camera optional - wizard disabled.";
+const CAMERA_DENIED_STATUS = "Camera access denied.";
+const CAMERA_UNSUPPORTED_STATUS = "Camera unavailable in this browser.";
+const CAMERA_ERROR_STATUS = "Camera unavailable due to runtime error.";
+const TRACKING_UNAVAILABLE_STATUS = "Camera active - hand tracking unavailable.";
 
 const DEFAULT_DEBUG_INFO: HandDebugInfo = {
   palmCount: 0,
@@ -101,11 +118,14 @@ const DEFAULT_DEBUG_INFO: HandDebugInfo = {
   mappedScaleRight: 0,
   mappedFingerLeft: 0,
   mappedFingerRight: 0,
+  mappedFingerCurlsLeft: createZeroFingerCurls(),
+  mappedFingerCurlsRight: createZeroFingerCurls(),
   staleMs: 0
 };
 
 export class HandWizardController {
   private readonly testMode: boolean;
+  private readonly trackerMode: "default" | "off" | "mockfail" | "remote";
   private readonly video: HTMLVideoElement;
   private readonly onStateChange?: (state: HandWizardUiState) => void;
 
@@ -131,9 +151,11 @@ export class HandWizardController {
   private leftHandOffset: Vec3 = { x: 0, y: 0, z: 0 };
   private leftHandScale = 0;
   private leftFingerSignal = 0;
+  private leftFingerCurls: FingerCurls = createZeroFingerCurls();
   private rightHandOffset: Vec3 = { x: 0, y: 0, z: 0 };
   private rightHandScale = 0;
   private rightFingerSignal = 0;
+  private rightFingerCurls: FingerCurls = createZeroFingerCurls();
 
   private uiState: HandWizardUiState = {
     webcamVisible: true,
@@ -141,6 +163,7 @@ export class HandWizardController {
     wizardActive: false,
     statusText: "Initializing hand tracking...",
     statusColor: "#00ffff",
+    cameraState: "active",
     handMode: "none",
     handTrackingState: "loading",
     debug: { ...DEFAULT_DEBUG_INFO }
@@ -148,6 +171,7 @@ export class HandWizardController {
 
   constructor(config: HandWizardControllerConfig) {
     this.testMode = config.testMode;
+    this.trackerMode = config.trackerMode;
     this.video = config.video;
     this.onStateChange = config.onStateChange;
   }
@@ -159,6 +183,11 @@ export class HandWizardController {
     this.started = true;
 
     if (this.testMode) {
+      if (this.trackerMode === "off" || this.trackerMode === "mockfail") {
+        this.setTrackingUnavailable(this.trackerMode === "off" ? "disabled" : "runtime-error");
+        return;
+      }
+
       this.dualCalibrated = true;
       this.uiState = {
         webcamVisible: true,
@@ -166,6 +195,7 @@ export class HandWizardController {
         wizardActive: true,
         statusText: ACTIVE_DUAL_STATUS,
         statusColor: "#0f8",
+        cameraState: "active",
         handMode: "dual",
         handTrackingState: "active",
         debug: {
@@ -185,13 +215,7 @@ export class HandWizardController {
     }
 
     if (!navigator.mediaDevices?.getUserMedia) {
-      this.setDisabled();
-      return;
-    }
-
-    const api = await loadLegacyMediaPipe();
-    if (!api) {
-      this.setDisabled();
+      this.setCameraUnavailable("unsupported");
       return;
     }
 
@@ -201,9 +225,36 @@ export class HandWizardController {
       });
       this.video.srcObject = this.stream;
       await this.video.play();
+      this.uiState.webcamVisible = true;
+      this.uiState.cameraState = "active";
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "NotAllowedError") {
+        this.setCameraUnavailable("denied");
+      } else if (error instanceof DOMException && error.name === "NotFoundError") {
+        this.setCameraUnavailable("unsupported");
+      } else {
+        this.setCameraUnavailable("error");
+      }
+      return;
+    }
 
+    if (this.trackerMode === "off") {
+      this.setTrackingUnavailable("disabled");
+      return;
+    }
+
+    const api = await loadLegacyMediaPipe({
+      allowRemoteFallback: this.trackerMode === "remote",
+      forceFailure: this.trackerMode === "mockfail"
+    });
+    if (!api.ok) {
+      this.setTrackingUnavailable(api.errorCode);
+      return;
+    }
+
+    try {
       this.hands = new api.Hands({
-        locateFile: (file: string): string => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+        locateFile: (file: string): string => file
       });
 
       this.hands.setOptions({
@@ -233,10 +284,11 @@ export class HandWizardController {
       this.uiState.overlayOpacity = OVERLAY_READY_OPACITY;
       this.uiState.statusText = INACTIVE_STATUS;
       this.uiState.statusColor = "#00ffff";
+      this.uiState.trackingStateDetail = undefined;
       this.uiState.handTrackingState = "ready";
       this.emitState();
     } catch {
-      this.setDisabled();
+      this.setTrackingUnavailable("runtime-error");
     }
   }
 
@@ -272,6 +324,15 @@ export class HandWizardController {
       this.handScale = (leftSmooth.scale + rightSmooth.scale) / 2;
       this.leftFingerSignal = 0.25 + 0.15 * Math.sin(time * 1.3);
       this.rightFingerSignal = this.leftFingerSignal;
+      const syntheticCurls: FingerCurls = {
+        thumb: 0.28 + 0.18 * (Math.sin(time * 1.5) * 0.5 + 0.5),
+        index: 0.22 + 0.22 * (Math.sin(time * 1.2 + 0.7) * 0.5 + 0.5),
+        middle: 0.25 + 0.24 * (Math.sin(time * 1.1 + 1.4) * 0.5 + 0.5),
+        ring: 0.27 + 0.2 * (Math.sin(time * 1.35 + 2.1) * 0.5 + 0.5),
+        pinky: 0.26 + 0.2 * (Math.sin(time * 1.45 + 2.8) * 0.5 + 0.5)
+      };
+      this.leftFingerCurls = syntheticCurls;
+      this.rightFingerCurls = syntheticCurls;
 
       this.uiState.debug = {
         ...this.uiState.debug,
@@ -283,6 +344,9 @@ export class HandWizardController {
         mappedScaleRight: this.rightHandScale,
         mappedFingerLeft: this.leftFingerSignal,
         mappedFingerRight: this.rightFingerSignal,
+        mappedFingerCurlsLeft: this.leftFingerCurls,
+        mappedFingerCurlsRight: this.rightFingerCurls,
+        singleRole: undefined,
         staleMs: 0
       };
       return;
@@ -298,13 +362,16 @@ export class HandWizardController {
     if (staleMs > 450) {
       const leftSmooth = smoothHandState(this.leftHandOffset, this.leftHandScale, { x: 0, y: 0, z: 0 }, 0, 0.08);
       const rightSmooth = smoothHandState(this.rightHandOffset, this.rightHandScale, { x: 0, y: 0, z: 0 }, 0, 0.08);
+      const zeroCurls = createZeroFingerCurls();
 
       this.leftHandOffset = leftSmooth.offset;
       this.leftHandScale = leftSmooth.scale;
       this.rightHandOffset = rightSmooth.offset;
       this.rightHandScale = rightSmooth.scale;
-      this.leftFingerSignal = 0;
-      this.rightFingerSignal = 0;
+      this.leftFingerSignal *= 0.92;
+      this.rightFingerSignal *= 0.92;
+      this.leftFingerCurls = smoothFingerCurls(this.leftFingerCurls, zeroCurls, 0.08);
+      this.rightFingerCurls = smoothFingerCurls(this.rightFingerCurls, zeroCurls, 0.08);
 
       this.handOffset = {
         x: (leftSmooth.offset.x + rightSmooth.offset.x) / 2,
@@ -320,6 +387,9 @@ export class HandWizardController {
       this.uiState.debug.mappedScaleRight = this.rightHandScale;
       this.uiState.debug.mappedFingerLeft = this.leftFingerSignal;
       this.uiState.debug.mappedFingerRight = this.rightFingerSignal;
+      this.uiState.debug.mappedFingerCurlsLeft = this.leftFingerCurls;
+      this.uiState.debug.mappedFingerCurlsRight = this.rightFingerCurls;
+      this.uiState.debug.singleRole = undefined;
       this.uiState.debug.inCenter = false;
       this.uiState.debug.leftTargetReady = false;
       this.uiState.debug.rightTargetReady = false;
@@ -371,6 +441,10 @@ export class HandWizardController {
     return this.leftFingerSignal;
   }
 
+  getLeftFingerCurls(): FingerCurls {
+    return this.leftFingerCurls;
+  }
+
   getRightOffset(): Vec3 {
     return this.rightHandOffset;
   }
@@ -381,6 +455,14 @@ export class HandWizardController {
 
   getRightFingerSignal(): number {
     return this.rightFingerSignal;
+  }
+
+  getRightFingerCurls(): FingerCurls {
+    return this.rightFingerCurls;
+  }
+
+  getSingleRole(): "left" | "right" | undefined {
+    return this.uiState.debug.singleRole;
   }
 
   getUiState(): HandWizardUiState {
@@ -399,14 +481,16 @@ export class HandWizardController {
     this.leftHandOffset = { x: 0, y: 0, z: 0 };
     this.leftHandScale = 0;
     this.leftFingerSignal = 0;
+    this.leftFingerCurls = createZeroFingerCurls();
     this.rightHandOffset = { x: 0, y: 0, z: 0 };
     this.rightHandScale = 0;
     this.rightFingerSignal = 0;
+    this.rightFingerCurls = createZeroFingerCurls();
     this.uiState.overlayOpacity = OVERLAY_READY_OPACITY;
     this.uiState.wizardActive = false;
     this.uiState.handMode = "none";
     this.uiState.handTrackingState = this.uiState.handTrackingState === "disabled" ? "disabled" : "ready";
-    this.uiState.statusText = this.uiState.handTrackingState === "disabled" ? DISABLED_STATUS : INACTIVE_STATUS;
+    this.uiState.statusText = this.uiState.handTrackingState === "disabled" ? TRACKING_UNAVAILABLE_STATUS : INACTIVE_STATUS;
     this.uiState.statusColor = this.uiState.handTrackingState === "disabled" ? "#ffaa66" : "#00ffff";
     this.uiState.debug = {
       ...this.uiState.debug,
@@ -425,7 +509,10 @@ export class HandWizardController {
       mappedOffsetRight: { x: 0, y: 0, z: 0 },
       mappedScaleRight: 0,
       mappedFingerLeft: 0,
-      mappedFingerRight: 0
+      mappedFingerRight: 0,
+      mappedFingerCurlsLeft: createZeroFingerCurls(),
+      mappedFingerCurlsRight: createZeroFingerCurls(),
+      singleRole: undefined
     };
     this.emitState();
   }
@@ -450,9 +537,11 @@ export class HandWizardController {
     this.leftHandOffset = { x: 0, y: 0, z: 0 };
     this.leftHandScale = 0;
     this.leftFingerSignal = 0;
+    this.leftFingerCurls = createZeroFingerCurls();
     this.rightHandOffset = { x: 0, y: 0, z: 0 };
     this.rightHandScale = 0;
     this.rightFingerSignal = 0;
+    this.rightFingerCurls = createZeroFingerCurls();
   }
 
   private cloneLandmarks(landmarks: LegacyLandmark[] | undefined): Vec3[] | undefined {
@@ -467,11 +556,28 @@ export class HandWizardController {
     }));
   }
 
+  private resolveSingleRole(singleRawX: number, label?: string): "left" | "right" {
+    const normalized = label?.toLowerCase();
+    if (normalized === "left") {
+      return "left";
+    }
+    if (normalized === "right") {
+      return "right";
+    }
+
+    return mirrorWebcamX(singleRawX) <= 0.5 ? "left" : "right";
+  }
+
   private handleResults(results: LegacyHandsResults): void {
     this.lastHandTime = Date.now();
 
     const landmarks = results.multiHandLandmarks;
     if (!landmarks || landmarks.length < 1) {
+      const zeroCurls = createZeroFingerCurls();
+      this.leftFingerSignal *= 0.9;
+      this.rightFingerSignal *= 0.9;
+      this.leftFingerCurls = smoothFingerCurls(this.leftFingerCurls, zeroCurls, 0.12);
+      this.rightFingerCurls = smoothFingerCurls(this.rightFingerCurls, zeroCurls, 0.12);
       this.uiState.debug = {
         ...this.uiState.debug,
         palmCount: 0,
@@ -485,8 +591,11 @@ export class HandWizardController {
         mappedScaleLeft: 0,
         mappedOffsetRight: { x: 0, y: 0, z: 0 },
         mappedScaleRight: 0,
-        mappedFingerLeft: 0,
-        mappedFingerRight: 0,
+        mappedFingerLeft: this.leftFingerSignal,
+        mappedFingerRight: this.rightFingerSignal,
+        mappedFingerCurlsLeft: this.leftFingerCurls,
+        mappedFingerCurlsRight: this.rightFingerCurls,
+        singleRole: undefined,
         sharedRatio: this.uiState.debug.sharedRatio
       };
       this.emitState();
@@ -531,6 +640,11 @@ export class HandWizardController {
       this.calibTimerMs = 0;
       this.recalibrationTimerMs = 0;
       this.recalibrationLatched = false;
+      const zeroCurls = createZeroFingerCurls();
+      this.leftFingerSignal *= 0.88;
+      this.rightFingerSignal *= 0.88;
+      this.leftFingerCurls = smoothFingerCurls(this.leftFingerCurls, zeroCurls, 0.12);
+      this.rightFingerCurls = smoothFingerCurls(this.rightFingerCurls, zeroCurls, 0.12);
       this.uiState.handMode = "none";
       this.uiState.handTrackingState = "ready";
       this.uiState.statusText = INACTIVE_STATUS;
@@ -551,8 +665,11 @@ export class HandWizardController {
         mappedScaleLeft: 0,
         mappedOffsetRight: { x: 0, y: 0, z: 0 },
         mappedScaleRight: 0,
-        mappedFingerLeft: 0,
-        mappedFingerRight: 0
+        mappedFingerLeft: this.leftFingerSignal,
+        mappedFingerRight: this.rightFingerSignal,
+        mappedFingerCurlsLeft: this.leftFingerCurls,
+        mappedFingerCurlsRight: this.rightFingerCurls,
+        singleRole: undefined
       };
       this.emitState();
       return;
@@ -566,6 +683,9 @@ export class HandWizardController {
       this.recalibrationTimerMs = 0;
       this.recalibrationLatched = false;
       const single = assignment.single;
+      const singleRole = this.resolveSingleRole(single.x, candidates[0]?.label);
+      const singleCurls = computeFingerCurls(single.landmarks);
+      const zeroCurls = createZeroFingerCurls();
 
       this.uiState.debug = {
         ...this.uiState.debug,
@@ -583,10 +703,13 @@ export class HandWizardController {
         inCenter: false,
         leftTargetReady: false,
         rightTargetReady: false,
-        calibrationTimerMs: 0
+        calibrationTimerMs: 0,
+        singleRole
       };
 
       if (this.singleStableMs < SINGLE_FALLBACK_HOLD_MS) {
+        this.leftFingerCurls = smoothFingerCurls(this.leftFingerCurls, singleRole === "left" ? singleCurls : zeroCurls, 0.22);
+        this.rightFingerCurls = smoothFingerCurls(this.rightFingerCurls, singleRole === "right" ? singleCurls : zeroCurls, 0.22);
         this.uiState.handMode = "none";
         this.uiState.handTrackingState = "ready";
         this.uiState.statusText = WAIT_SINGLE_STATUS;
@@ -603,14 +726,20 @@ export class HandWizardController {
       }
 
       const mapped = mapSingleHandPose(single, this.neutralSingle);
-      const leftSmooth = smoothHandState(this.leftHandOffset, this.leftHandScale, mapped.offset, mapped.spread, 0.22);
-      const rightSmooth = smoothHandState(this.rightHandOffset, this.rightHandScale, mapped.offset, mapped.spread, 0.22);
+      const leftTargetOffset = singleRole === "left" ? mapped.offset : { x: 0, y: 0, z: 0 };
+      const rightTargetOffset = singleRole === "right" ? mapped.offset : { x: 0, y: 0, z: 0 };
+      const leftTargetScale = singleRole === "left" ? mapped.spread : 0;
+      const rightTargetScale = singleRole === "right" ? mapped.spread : 0;
+      const leftSmooth = smoothHandState(this.leftHandOffset, this.leftHandScale, leftTargetOffset, leftTargetScale, 0.22);
+      const rightSmooth = smoothHandState(this.rightHandOffset, this.rightHandScale, rightTargetOffset, rightTargetScale, 0.22);
       this.leftHandOffset = leftSmooth.offset;
       this.leftHandScale = leftSmooth.scale;
       this.rightHandOffset = rightSmooth.offset;
       this.rightHandScale = rightSmooth.scale;
-      this.leftFingerSignal = mapped.fingerSignal;
-      this.rightFingerSignal = mapped.fingerSignal;
+      this.leftFingerSignal = this.leftFingerSignal * 0.78 + (singleRole === "left" ? mapped.fingerSignal : 0) * 0.22;
+      this.rightFingerSignal = this.rightFingerSignal * 0.78 + (singleRole === "right" ? mapped.fingerSignal : 0) * 0.22;
+      this.leftFingerCurls = smoothFingerCurls(this.leftFingerCurls, singleRole === "left" ? singleCurls : zeroCurls, 0.22);
+      this.rightFingerCurls = smoothFingerCurls(this.rightFingerCurls, singleRole === "right" ? singleCurls : zeroCurls, 0.22);
       this.handOffset = {
         x: (leftSmooth.offset.x + rightSmooth.offset.x) / 2,
         y: (leftSmooth.offset.y + rightSmooth.offset.y) / 2,
@@ -633,7 +762,10 @@ export class HandWizardController {
         mappedOffsetRight: { ...this.rightHandOffset },
         mappedScaleRight: this.rightHandScale,
         mappedFingerLeft: this.leftFingerSignal,
-        mappedFingerRight: this.rightFingerSignal
+        mappedFingerRight: this.rightFingerSignal,
+        mappedFingerCurlsLeft: this.leftFingerCurls,
+        mappedFingerCurlsRight: this.rightFingerCurls,
+        singleRole
       };
       this.emitState();
       return;
@@ -660,7 +792,8 @@ export class HandWizardController {
       inCenter,
       leftTargetReady: targetState.leftTargetReady,
       rightTargetReady: targetState.rightTargetReady,
-      calibrationTimerMs: this.calibTimerMs
+      calibrationTimerMs: this.calibTimerMs,
+      singleRole: undefined
     };
 
     if (!this.dualCalibrated) {
@@ -695,6 +828,8 @@ export class HandWizardController {
 
     const mappedLeft = mapLeftHandPose(leftPalm, this.neutralLeft);
     const mappedRight = mapRightHandPose(rightPalm, this.neutralRight);
+    const mappedCurlsLeft = computeFingerCurls(leftPalm.landmarks);
+    const mappedCurlsRight = computeFingerCurls(rightPalm.landmarks);
 
     const leftSmooth = smoothHandState(this.leftHandOffset, this.leftHandScale, mappedLeft.offset, mappedLeft.spread, 0.22);
     const rightSmooth = smoothHandState(this.rightHandOffset, this.rightHandScale, mappedRight.offset, mappedRight.spread, 0.22);
@@ -705,6 +840,8 @@ export class HandWizardController {
     this.rightHandScale = rightSmooth.scale;
     this.leftFingerSignal = mappedLeft.fingerSignal;
     this.rightFingerSignal = mappedRight.fingerSignal;
+    this.leftFingerCurls = smoothFingerCurls(this.leftFingerCurls, mappedCurlsLeft, 0.22);
+    this.rightFingerCurls = smoothFingerCurls(this.rightFingerCurls, mappedCurlsRight, 0.22);
     this.handOffset = {
       x: (leftSmooth.offset.x + rightSmooth.offset.x) / 2,
       y: (leftSmooth.offset.y + rightSmooth.offset.y) / 2,
@@ -752,22 +889,65 @@ export class HandWizardController {
       mappedOffsetRight: { ...this.rightHandOffset },
       mappedScaleRight: this.rightHandScale,
       mappedFingerLeft: this.leftFingerSignal,
-      mappedFingerRight: this.rightFingerSignal
+      mappedFingerRight: this.rightFingerSignal,
+      mappedFingerCurlsLeft: this.leftFingerCurls,
+      mappedFingerCurlsRight: this.rightFingerCurls,
+      singleRole: undefined
     };
     this.emitState();
   }
 
-  private setDisabled(): void {
+  private setCameraUnavailable(cameraState: CameraState): void {
+    const statusText =
+      cameraState === "denied"
+        ? CAMERA_DENIED_STATUS
+        : cameraState === "unsupported"
+          ? CAMERA_UNSUPPORTED_STATUS
+          : CAMERA_ERROR_STATUS;
+
     this.uiState = {
       webcamVisible: false,
       overlayOpacity: 0,
       wizardActive: false,
-      statusText: DISABLED_STATUS,
+      statusText,
       statusColor: "#ffaa66",
+      cameraState,
+      trackingStateDetail: "disabled",
       handMode: "none",
       handTrackingState: "disabled",
       debug: { ...DEFAULT_DEBUG_INFO }
     };
+    this.emitState();
+  }
+
+  private setTrackingUnavailable(detail: TrackingStateDetail): void {
+    this.dualCalibrated = false;
+    this.singleNeutralSet = false;
+    this.calibTimerMs = 0;
+    this.recalibrationTimerMs = 0;
+    this.recalibrationLatched = false;
+    this.singleStableMs = 0;
+    this.handOffset = { x: 0, y: 0, z: 0 };
+    this.handScale = 0;
+    this.leftHandOffset = { x: 0, y: 0, z: 0 };
+    this.leftHandScale = 0;
+    this.leftFingerSignal = 0;
+    this.leftFingerCurls = createZeroFingerCurls();
+    this.rightHandOffset = { x: 0, y: 0, z: 0 };
+    this.rightHandScale = 0;
+    this.rightFingerSignal = 0;
+    this.rightFingerCurls = createZeroFingerCurls();
+
+    this.uiState.webcamVisible = true;
+    this.uiState.overlayOpacity = OVERLAY_READY_OPACITY;
+    this.uiState.wizardActive = false;
+    this.uiState.statusText = TRACKING_UNAVAILABLE_STATUS;
+    this.uiState.statusColor = "#ffaa66";
+    this.uiState.cameraState = "active";
+    this.uiState.trackingStateDetail = detail;
+    this.uiState.handMode = "none";
+    this.uiState.handTrackingState = "disabled";
+    this.uiState.debug = { ...DEFAULT_DEBUG_INFO };
     this.emitState();
   }
 

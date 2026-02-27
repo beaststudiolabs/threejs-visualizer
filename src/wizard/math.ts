@@ -9,6 +9,14 @@ export type Vec3WithFingers = Vec3 & {
   indexTip?: Vec3;
 };
 
+export type FingerCurls = {
+  thumb: number;
+  index: number;
+  middle: number;
+  ring: number;
+  pinky: number;
+};
+
 export type PalmPose = Vec3WithFingers & {
   landmarks?: Vec3[];
 };
@@ -43,6 +51,14 @@ export type PalmAssignment =
 export const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
 
 export const clamp01 = (value: number): number => clamp(value, 0, 1);
+
+export const createZeroFingerCurls = (): FingerCurls => ({
+  thumb: 0,
+  index: 0,
+  middle: 0,
+  ring: 0,
+  pinky: 0
+});
 
 export type PalmTarget = {
   x: number;
@@ -156,6 +172,59 @@ export const computeFingerSignal = (current: Vec3WithFingers, neutral: Vec3WithF
   const range = clamp(Math.abs(maxRange), 0.001, 1);
   const delta = clamp(neutralDistance - currentDistance, -range, range);
   return clamp01((delta + range) / (2 * range));
+};
+
+const segmentDistance = (a: Vec3 | undefined, b: Vec3 | undefined): number => {
+  if (!a || !b) {
+    return 0;
+  }
+  return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+};
+
+const computeCurlFromChain = (
+  landmarks: Vec3[],
+  mcpIndex: number,
+  pipIndex: number,
+  dipIndex: number,
+  tipIndex: number
+): number => {
+  const mcp = landmarks[mcpIndex];
+  const pip = landmarks[pipIndex];
+  const dip = landmarks[dipIndex];
+  const tip = landmarks[tipIndex];
+  if (!mcp || !pip || !dip || !tip) {
+    return 0;
+  }
+
+  const chain = segmentDistance(mcp, pip) + segmentDistance(pip, dip) + segmentDistance(dip, tip);
+  const straight = segmentDistance(mcp, tip);
+  return clamp01(1 - straight / Math.max(chain, 1e-4));
+};
+
+export const computeFingerCurls = (landmarks?: Vec3[]): FingerCurls => {
+  if (!landmarks || landmarks.length < 21) {
+    return createZeroFingerCurls();
+  }
+
+  return {
+    thumb: computeCurlFromChain(landmarks, 1, 2, 3, 4),
+    index: computeCurlFromChain(landmarks, 5, 6, 7, 8),
+    middle: computeCurlFromChain(landmarks, 9, 10, 11, 12),
+    ring: computeCurlFromChain(landmarks, 13, 14, 15, 16),
+    pinky: computeCurlFromChain(landmarks, 17, 18, 19, 20)
+  };
+};
+
+export const smoothFingerCurls = (current: FingerCurls, target: FingerCurls, lerp = 0.22): FingerCurls => {
+  const amount = clamp01(lerp);
+  const keep = 1 - amount;
+  return {
+    thumb: current.thumb * keep + target.thumb * amount,
+    index: current.index * keep + target.index * amount,
+    middle: current.middle * keep + target.middle * amount,
+    ring: current.ring * keep + target.ring * amount,
+    pinky: current.pinky * keep + target.pinky * amount
+  };
 };
 
 export const mapHandPoseForModel = (
@@ -496,17 +565,86 @@ export const computeModePosition = (mode: number, t: number, a: number, b: numbe
     return p;
   }
 
-  const u = a * tau;
-  const pK = 3;
-  const qK = 5;
-  const core = 9.5 + 2.3 * Math.cos(qK * u + t * 2);
-  const xk = core * Math.cos(pK * u);
-  const yk = core * Math.sin(pK * u);
-  const zk = 2.3 * Math.sin(qK * u + t * 2);
+  if (mode === 9) {
+    const u = a * tau;
+    const pK = 3;
+    const qK = 5;
+    const core = 9.5 + 2.3 * Math.cos(qK * u + t * 2);
+    const xk = core * Math.cos(pK * u);
+    const yk = core * Math.sin(pK * u);
+    const zk = 2.3 * Math.sin(qK * u + t * 2);
+    const ring = b * tau;
+    const tube = 1.4 + Math.sin(u * 4 + t * 1.8) * 0.35;
+    p.x = xk + tube * Math.cos(ring) * Math.cos(u);
+    p.y = yk + tube * Math.cos(ring) * Math.sin(u);
+    p.z = zk + tube * Math.sin(ring) * 1.3;
+    return p;
+  }
+
+  const palmShare = 0.46;
+  const thumbShare = 0.56;
+  const indexShare = 0.67;
+  const middleShare = 0.78;
+  const ringShare = 0.89;
+
+  if (a < palmShare) {
+    const local = a / palmShare;
+    const wristTaper = 1 - Math.pow(local, 1.8);
+    const theta = b * tau;
+    const palmRadiusX = 3.6 + 1.7 * local;
+    const palmRadiusY = 2.1 + 0.8 * local;
+    p.x = Math.cos(theta) * palmRadiusX + Math.sin(t * 1.2 + local * 8) * 0.35;
+    p.y = Math.sin(theta) * palmRadiusY + (local - 0.35) * 1.4;
+    p.z = (0.5 - local) * 4.2 + Math.cos(theta * 2 + t * 0.8) * 0.5;
+    p.x *= 0.75 + wristTaper * 0.25;
+    p.y *= 0.9 + wristTaper * 0.1;
+    p.z *= 0.9 + wristTaper * 0.1;
+    return p;
+  }
+
+  let fingerIndex = 0;
+  let start = palmShare;
+  let end = thumbShare;
+  if (a >= thumbShare && a < indexShare) {
+    fingerIndex = 1;
+    start = thumbShare;
+    end = indexShare;
+  } else if (a >= indexShare && a < middleShare) {
+    fingerIndex = 2;
+    start = indexShare;
+    end = middleShare;
+  } else if (a >= middleShare && a < ringShare) {
+    fingerIndex = 3;
+    start = middleShare;
+    end = ringShare;
+  } else if (a >= ringShare) {
+    fingerIndex = 4;
+    start = ringShare;
+    end = 1;
+  }
+
+  const local = clamp01((a - start) / Math.max(1e-4, end - start));
   const ring = b * tau;
-  const tube = 1.4 + Math.sin(u * 4 + t * 1.8) * 0.35;
-  p.x = xk + tube * Math.cos(ring) * Math.cos(u);
-  p.y = yk + tube * Math.cos(ring) * Math.sin(u);
-  p.z = zk + tube * Math.sin(ring) * 1.3;
+  const baseX = [-3.3, -1.25, 0.35, 1.75, 3.05][fingerIndex];
+  const baseY = [-0.55, 0.95, 1.25, 1.05, 0.7][fingerIndex];
+  const baseZ = [0.2, 1.1, 1.35, 1.05, 0.75][fingerIndex];
+  const length = [5.0, 6.4, 7.0, 6.5, 5.6][fingerIndex];
+  const radiusBase = [0.95, 0.72, 0.75, 0.7, 0.64][fingerIndex];
+  const radius = radiusBase * (1 - 0.55 * local);
+  const animatedCurl = 0.24 + 0.22 * (Math.sin(t * 0.75 + fingerIndex * 0.9) * 0.5 + 0.5);
+  const bend = animatedCurl * (0.45 + local * local * 1.35);
+  const along = local * length;
+
+  const thumbYaw = fingerIndex === 0 ? -0.68 : 0;
+  const forwardX = Math.cos(thumbYaw) * Math.cos(bend);
+  const forwardY = Math.sin(bend) * (fingerIndex === 0 ? 0.75 : 1);
+  const forwardZ = Math.sin(thumbYaw) * Math.cos(bend);
+
+  p.x = baseX + forwardX * along + Math.cos(ring) * radius;
+  p.y = baseY + forwardY * along + Math.sin(ring) * radius * 0.85;
+  p.z = baseZ + forwardZ * along + Math.sin(ring + t * 0.25 + local * 3) * radius * 1.25;
+  p.x += Math.sin(t * 1.15 + local * 12 + fingerIndex * 1.4) * 0.22;
+  p.y += Math.cos(t * 1.08 + local * 10 + fingerIndex * 1.2) * 0.2;
+  p.z += Math.sin(t * 0.9 + local * 13 + fingerIndex * 0.8) * 0.22;
   return p;
 };

@@ -25,6 +25,7 @@ import {
 import { parseWizardQuery } from "../wizard/query";
 
 const MIC_LONG_PRESS_MS = 325;
+const BACKGROUND_LONG_PRESS_MS = 325;
 
 type LandmarkPoint = {
   x: number;
@@ -120,6 +121,9 @@ export const App = (): JSX.Element => {
   const micHoldTimerRef = useRef<number | undefined>(undefined);
   const micPointerDownRef = useRef(false);
   const micLongPressRef = useRef(false);
+  const backgroundHoldTimerRef = useRef<number | undefined>(undefined);
+  const backgroundPointerDownRef = useRef(false);
+  const backgroundLongPressRef = useRef(false);
 
   const [hud, setHud] = useState<WizardHudState>(() => createInitialHudState());
   const [palette, setPalette] = useState<PaletteConfig>(DEFAULT_PALETTE);
@@ -130,6 +134,7 @@ export const App = (): JSX.Element => {
   const [debugVisible, setDebugVisible] = useState(query.debug);
   const [cameraResponse, setCameraResponse] = useState(0.15);
   const [micSensitivityVisible, setMicSensitivityVisible] = useState(false);
+  const [backgroundColorVisible, setBackgroundColorVisible] = useState(false);
 
   const controlsUiVisible = controlsVisible && !isFullscreen;
 
@@ -137,6 +142,13 @@ export const App = (): JSX.Element => {
     if (micHoldTimerRef.current !== undefined) {
       window.clearTimeout(micHoldTimerRef.current);
       micHoldTimerRef.current = undefined;
+    }
+  }, []);
+
+  const clearBackgroundHoldTimer = useCallback((): void => {
+    if (backgroundHoldTimerRef.current !== undefined) {
+      window.clearTimeout(backgroundHoldTimerRef.current);
+      backgroundHoldTimerRef.current = undefined;
     }
   }, []);
 
@@ -153,6 +165,21 @@ export const App = (): JSX.Element => {
       }
     },
     [clearMicHoldTimer]
+  );
+
+  const finishBackgroundPress = useCallback(
+    (toggleOnRelease: boolean): void => {
+      clearBackgroundHoldTimer();
+      if (!backgroundPointerDownRef.current) {
+        return;
+      }
+
+      backgroundPointerDownRef.current = false;
+      if (toggleOnRelease && !backgroundLongPressRef.current) {
+        runtimeRef.current?.toggleBackgroundStars();
+      }
+    },
+    [clearBackgroundHoldTimer]
   );
 
   const toggleFullscreen = useCallback(async (): Promise<void> => {
@@ -184,6 +211,7 @@ export const App = (): JSX.Element => {
       canvas,
       video,
       testMode: query.testMode,
+      trackerMode: query.trackerMode,
       seed: query.seed,
       fixedTimeSec: query.fixedTimeSec,
       width: query.width,
@@ -271,16 +299,26 @@ export const App = (): JSX.Element => {
       return;
     }
     setMicSensitivityVisible(false);
+    setBackgroundColorVisible(false);
     clearMicHoldTimer();
     micPointerDownRef.current = false;
     micLongPressRef.current = false;
-  }, [controlsUiVisible, clearMicHoldTimer]);
+    clearBackgroundHoldTimer();
+    backgroundPointerDownRef.current = false;
+    backgroundLongPressRef.current = false;
+  }, [controlsUiVisible, clearBackgroundHoldTimer, clearMicHoldTimer]);
 
   useEffect(() => {
     return () => {
       clearMicHoldTimer();
     };
   }, [clearMicHoldTimer]);
+
+  useEffect(() => {
+    return () => {
+      clearBackgroundHoldTimer();
+    };
+  }, [clearBackgroundHoldTimer]);
 
   const handleTransform = (): void => {
     runtimeRef.current?.cycleTransform();
@@ -402,6 +440,49 @@ export const App = (): JSX.Element => {
 
     event.preventDefault();
     void runtimeRef.current?.toggleMic();
+  };
+
+  const handleBackgroundColorChange = (event: ChangeEvent<HTMLInputElement>): void => {
+    runtimeRef.current?.setBackgroundColor(event.target.value);
+  };
+
+  const handleBackgroundPointerDown = (event: ReactPointerEvent<HTMLButtonElement>): void => {
+    if (event.pointerType === "mouse" && event.button !== 0) {
+      return;
+    }
+
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // Some synthetic pointer events (tests) cannot capture pointers.
+    }
+    backgroundPointerDownRef.current = true;
+    backgroundLongPressRef.current = false;
+    clearBackgroundHoldTimer();
+    backgroundHoldTimerRef.current = window.setTimeout(() => {
+      if (!backgroundPointerDownRef.current) {
+        return;
+      }
+      backgroundLongPressRef.current = true;
+      setBackgroundColorVisible(true);
+    }, BACKGROUND_LONG_PRESS_MS);
+  };
+
+  const handleBackgroundPointerUp = (): void => {
+    finishBackgroundPress(true);
+  };
+
+  const handleBackgroundPointerCancel = (): void => {
+    finishBackgroundPress(false);
+  };
+
+  const handleBackgroundKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>): void => {
+    if (event.key !== "Enter" && event.key !== " ") {
+      return;
+    }
+
+    event.preventDefault();
+    runtimeRef.current?.toggleBackgroundStars();
   };
 
   const forcedSize =
@@ -597,6 +678,7 @@ export const App = (): JSX.Element => {
             <span>Gyroid cloud</span>
             <span>Superformula bloom</span>
             <span>Wave torus knot</span>
+            <span>Particle hands</span>
           </div>
         </aside>
 
@@ -624,6 +706,20 @@ export const App = (): JSX.Element => {
             {hud.trailsActive ? "TRAILS" : "TRAILS OFF"}
           </button>
           <button
+            id="background-btn"
+            data-testid="background-btn"
+            data-active={String(hud.backgroundStarsEnabled)}
+            type="button"
+            onPointerDown={handleBackgroundPointerDown}
+            onPointerUp={handleBackgroundPointerUp}
+            onPointerCancel={handleBackgroundPointerCancel}
+            onPointerLeave={handleBackgroundPointerCancel}
+            onKeyDown={handleBackgroundKeyDown}
+            style={{ opacity: hud.backgroundStarsEnabled ? 1 : 0.4 }}
+          >
+            BACKGROUND
+          </button>
+          <button
             id="mic-btn"
             data-testid="mic-btn"
             data-mic-status={hud.micStatus}
@@ -647,7 +743,7 @@ export const App = (): JSX.Element => {
 
         {micSensitivityVisible && (
           <div id="mic-sensitivity-popout" data-testid="mic-sensitivity-popout" className="panel">
-            <div className="mic-popout-head">
+            <div className="popout-head">
               <strong>Mic Sensitivity</strong>
               <button type="button" onClick={() => setMicSensitivityVisible(false)}>
                 CLOSE
@@ -669,6 +765,27 @@ export const App = (): JSX.Element => {
           </div>
         )}
 
+        {backgroundColorVisible && (
+          <div id="background-color-popout" data-testid="background-color-popout" className="panel">
+            <div className="popout-head">
+              <strong>Background Color</strong>
+              <button type="button" onClick={() => setBackgroundColorVisible(false)}>
+                CLOSE
+              </button>
+            </div>
+            <label htmlFor="background-color-input">Color</label>
+            <input
+              id="background-color-input"
+              data-testid="background-color-input"
+              type="color"
+              value={hud.backgroundColor}
+              onInput={handleBackgroundColorChange}
+              onChange={handleBackgroundColorChange}
+            />
+            <span>{hud.backgroundColor}</span>
+          </div>
+        )}
+
         {debugVisible && (
           <div id="debug-panel" className="panel" data-testid="debug-panel">
             <div className="debug-line">FPS: {hud.fps} / {hud.targetFps}</div>
@@ -681,17 +798,31 @@ export const App = (): JSX.Element => {
               Camera target: az {hud.cameraDebug.targetAzimuth.toFixed(3)} pol {hud.cameraDebug.targetPolar.toFixed(3)} dist {hud.cameraDebug.targetDistance.toFixed(2)}
             </div>
             <div className="debug-line">Hand track: {hud.handTrackingState} | mode {hud.handMode} | palms {hud.handDebug.palmCount}</div>
+            <div className="debug-line">
+              Camera state: {hud.cameraState} | tracker detail {hud.trackingStateDetail ?? "ok"}
+            </div>
             <div className="debug-line">Center: ({hud.handDebug.centerX.toFixed(3)}, {hud.handDebug.centerY.toFixed(3)}) inCenter {String(hud.handDebug.inCenter)}</div>
             <div className="debug-line">
               Shared: {hud.handDebug.sharedRatio?.toFixed(2) ?? "0"} | Budget: {hud.handDebug.sharedBudget ?? 0}
             </div>
+            <div className="debug-line">Single role: {hud.handDebug.singleRole ?? "none"}</div>
             <div className="debug-line">
               Left: ({hud.handDebug.mappedOffsetLeft.x.toFixed(2)}, {hud.handDebug.mappedOffsetLeft.y.toFixed(2)},{" "}
               {hud.handDebug.mappedOffsetLeft.z.toFixed(2)}) s={hud.handDebug.mappedScaleLeft.toFixed(2)} f={hud.handDebug.mappedFingerLeft.toFixed(2)}
             </div>
             <div className="debug-line">
+              Left curls: t={hud.handDebug.mappedFingerCurlsLeft.thumb.toFixed(2)} i={hud.handDebug.mappedFingerCurlsLeft.index.toFixed(2)} m=
+              {hud.handDebug.mappedFingerCurlsLeft.middle.toFixed(2)} r={hud.handDebug.mappedFingerCurlsLeft.ring.toFixed(2)} p=
+              {hud.handDebug.mappedFingerCurlsLeft.pinky.toFixed(2)}
+            </div>
+            <div className="debug-line">
               Right: ({hud.handDebug.mappedOffsetRight.x.toFixed(2)}, {hud.handDebug.mappedOffsetRight.y.toFixed(2)},{" "}
               {hud.handDebug.mappedOffsetRight.z.toFixed(2)}) s={hud.handDebug.mappedScaleRight.toFixed(2)} f={hud.handDebug.mappedFingerRight.toFixed(2)}
+            </div>
+            <div className="debug-line">
+              Right curls: t={hud.handDebug.mappedFingerCurlsRight.thumb.toFixed(2)} i={hud.handDebug.mappedFingerCurlsRight.index.toFixed(2)} m=
+              {hud.handDebug.mappedFingerCurlsRight.middle.toFixed(2)} r={hud.handDebug.mappedFingerCurlsRight.ring.toFixed(2)} p=
+              {hud.handDebug.mappedFingerCurlsRight.pinky.toFixed(2)}
             </div>
           </div>
         )}

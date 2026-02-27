@@ -6,12 +6,14 @@ import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPa
 import { mulberry32 } from "../utils/rng";
 import {
   HandWizardController,
+  type CameraState,
   type HandDebugInfo,
   type HandMode,
   type HandTrackingState,
+  type TrackingStateDetail,
   type HandWizardUiState
 } from "./HandWizardController";
-import { clamp, computeSharedRatio } from "./math";
+import { clamp, computeSharedRatio, createZeroFingerCurls, type FingerCurls } from "./math";
 import { MicAnalyzer, type MicStatus } from "./MicAnalyzer";
 
 export const FPS_CAP_MIN = 60;
@@ -35,9 +37,11 @@ export const WIZARD_MODE_NAMES = [
   "HELIX",
   "GYROID",
   "SUPERFORMULA",
-  "WAVE KNOT"
+  "WAVE KNOT",
+  "PARTICLE HANDS"
 ] as const;
 const MODE_NAMES = WIZARD_MODE_NAMES;
+const PARTICLE_HANDS_MODE_INDEX = MODE_NAMES.length - 1;
 
 export type VisualTuning = {
   bloomStrength: number;
@@ -86,6 +90,9 @@ const DEFAULT_HAND_DEBUG: HandDebugInfo = {
   mappedScaleRight: 0,
   mappedFingerLeft: 0,
   mappedFingerRight: 0,
+  mappedFingerCurlsLeft: createZeroFingerCurls(),
+  mappedFingerCurlsRight: createZeroFingerCurls(),
+  singleRole: undefined,
   staleMs: 0
 };
 
@@ -95,6 +102,8 @@ const DEFAULT_HAND_UI_STATE: HandWizardUiState = {
   wizardActive: false,
   statusText: "Align both palms with the outlines to calibrate wizard.",
   statusColor: "#00ffff",
+  cameraState: "active",
+  trackingStateDetail: undefined,
   handMode: "none",
   handTrackingState: "loading",
   debug: DEFAULT_HAND_DEBUG
@@ -110,6 +119,8 @@ export type WizardHudState = {
   trailsText: string;
   trailsActive: boolean;
   flowActive: boolean;
+  backgroundStarsEnabled: boolean;
+  backgroundColor: string;
   wizardActive: boolean;
   statusText: string;
   statusColor: string;
@@ -122,6 +133,8 @@ export type WizardHudState = {
   micLevel: number;
   handMode: HandMode;
   handTrackingState: HandTrackingState;
+  cameraState: CameraState;
+  trackingStateDetail?: TrackingStateDetail;
   handDebug: HandDebugInfo;
   cameraDebug: {
     azimuth: number;
@@ -144,6 +157,9 @@ type ParticleSideUniforms = {
   handOffset: { value: THREE.Vector3 };
   handScale: { value: number };
   handFingerSignal: { value: number };
+  handFingerCurlsA: { value: THREE.Vector4 };
+  handFingerCurlB: { value: number };
+  handPresence: { value: number };
   modelSeparation: { value: number };
   sharedRatio: { value: number };
   isRight: { value: number };
@@ -162,6 +178,7 @@ export type ParticleWizardRuntimeConfig = {
   canvas: HTMLCanvasElement;
   video: HTMLVideoElement;
   testMode: boolean;
+  trackerMode: "default" | "off" | "mockfail" | "remote";
   seed: number;
   fixedTimeSec?: number;
   width?: number;
@@ -180,6 +197,10 @@ const toColorVector = (hex: string): THREE.Vector3 => {
   return new THREE.Vector3(color.r, color.g, color.b);
 };
 
+const setFingerVectorA = (target: THREE.Vector4, curls: FingerCurls): void => {
+  target.set(curls.thumb, curls.index, curls.middle, curls.ring);
+};
+
 export const createInitialHudState = (): WizardHudState => ({
   particleCount: PARTICLE_COUNT_DEFAULT,
   targetFps: FPS_CAP_DEFAULT,
@@ -190,6 +211,8 @@ export const createInitialHudState = (): WizardHudState => ({
   trailsText: "ACTIVE",
   trailsActive: true,
   flowActive: true,
+  backgroundStarsEnabled: true,
+  backgroundColor: "#000000",
   wizardActive: false,
   statusText: DEFAULT_HAND_UI_STATE.statusText,
   statusColor: DEFAULT_HAND_UI_STATE.statusColor,
@@ -202,6 +225,8 @@ export const createInitialHudState = (): WizardHudState => ({
   micLevel: 0,
   handMode: "none",
   handTrackingState: "loading",
+  cameraState: "active",
+  trackingStateDetail: undefined,
   handDebug: { ...DEFAULT_HAND_DEBUG },
   cameraDebug: {
     azimuth: 0.6,
@@ -251,6 +276,8 @@ export class ParticleWizardRuntime {
   private targetMode = 0;
   private flowActive = true;
   private trailsActive = true;
+  private backgroundStarsEnabled = true;
+  private backgroundColor = "#000000";
   private particleCount = PARTICLE_COUNT_DEFAULT;
   private targetFps = FPS_CAP_DEFAULT;
   private fps = FPS_CAP_DEFAULT;
@@ -272,6 +299,8 @@ export class ParticleWizardRuntime {
   private lastPointerY = 0;
   private particleRebuildTimer?: number;
   private micLevel = 0;
+  private leftPresence = 1;
+  private rightPresence = 1;
   private readonly leftCenter = new THREE.Vector3();
   private readonly rightCenter = new THREE.Vector3();
 
@@ -283,6 +312,7 @@ export class ParticleWizardRuntime {
     this.mic = new MicAnalyzer(config.testMode);
     this.handController = new HandWizardController({
       testMode: config.testMode,
+      trackerMode: config.trackerMode,
       video: config.video,
       onStateChange: (state) => {
         this.handUiState = state;
@@ -366,6 +396,12 @@ export class ParticleWizardRuntime {
     if (this.afterimagePass) {
       this.afterimagePass.enabled = this.trailsActive;
     }
+    this.emitHud(true);
+  }
+
+  toggleBackgroundStars(): void {
+    this.backgroundStarsEnabled = !this.backgroundStarsEnabled;
+    this.applyBackgroundState();
     this.emitHud(true);
   }
 
@@ -486,6 +522,17 @@ export class ParticleWizardRuntime {
     this.emitHud(true);
   }
 
+  setBackgroundColor(next: string): void {
+    const normalized = next.trim().toLowerCase();
+    if (!/^#[0-9a-f]{6}$/.test(normalized) || normalized === this.backgroundColor) {
+      return;
+    }
+
+    this.backgroundColor = normalized;
+    this.applyBackgroundState();
+    this.emitHud(true);
+  }
+
   resetHandCalibration(): void {
     this.handController.resetCalibration();
     this.emitHud(true);
@@ -535,6 +582,8 @@ export class ParticleWizardRuntime {
     this.fpsSampleStart = performance.now();
     this.lastRenderTime = 0;
     this.micLevel = 0;
+    this.leftPresence = 1;
+    this.rightPresence = 1;
 
     this.detachPointerControls();
     this.handController.dispose();
@@ -617,6 +666,7 @@ export class ParticleWizardRuntime {
 
     this.buildParticles();
     this.buildStars();
+    this.applyBackgroundState();
     this.attachPointerControls();
 
     this.setVisualTuning(this.visualTuning);
@@ -640,6 +690,11 @@ export class ParticleWizardRuntime {
       handOffset: { value: previous?.handOffset.value ? previous.handOffset.value.clone() : new THREE.Vector3(0, 0, 0) },
       handScale: { value: previous?.handScale.value ?? 0 },
       handFingerSignal: { value: previous?.handFingerSignal.value ?? 0 },
+      handFingerCurlsA: {
+        value: previous?.handFingerCurlsA.value ? previous.handFingerCurlsA.value.clone() : new THREE.Vector4(0, 0, 0, 0)
+      },
+      handFingerCurlB: { value: previous?.handFingerCurlB.value ?? 0 },
+      handPresence: { value: previous?.handPresence.value ?? 1 },
       modelSeparation: { value: MODEL_SEPARATION },
       sharedRatio: { value: previous?.sharedRatio.value ?? 1 },
       isRight: { value: isRight },
@@ -715,6 +770,9 @@ export class ParticleWizardRuntime {
       uniform vec3 handOffset;
       uniform float handScale;
       uniform float handFingerSignal;
+      uniform vec4 handFingerCurlsA;
+      uniform float handFingerCurlB;
+      uniform float handPresence;
       uniform float modelSeparation;
       uniform float sharedRatio;
       uniform float isRight;
@@ -725,6 +783,7 @@ export class ParticleWizardRuntime {
       uniform float particleGain;
       varying vec3 vColor;
       varying float vVisible;
+      varying float vAlphaGain;
 
       float superFormula(float angle, float m, float n1, float n2, float n3, float a, float b) {
         float c = pow(abs(cos(m * angle * 0.25) / a), n2);
@@ -824,6 +883,102 @@ export class ParticleWizardRuntime {
           p.x = xk + tube * cos(ring) * cos(u);
           p.y = yk + tube * cos(ring) * sin(u);
           p.z = zk + tube * sin(ring) * 1.3;
+        } else if (mode == 10) {
+          float palmShare = 0.46;
+          if (a < palmShare) {
+            float localPalm = a / palmShare;
+            float wristTaper = 1.0 - pow(localPalm, 1.8);
+            float thetaPalm = b * 6.28318;
+            float palmRadiusX = 3.6 + 1.7 * localPalm;
+            float palmRadiusY = 2.1 + 0.8 * localPalm;
+            p.x = cos(thetaPalm) * palmRadiusX + sin(t * 1.2 + localPalm * 8.0) * 0.35;
+            p.y = sin(thetaPalm) * palmRadiusY + (localPalm - 0.35) * 1.4;
+            p.z = (0.5 - localPalm) * 4.2 + cos(thetaPalm * 2.0 + t * 0.8) * 0.5;
+            p.x *= 0.75 + wristTaper * 0.25;
+            p.y *= 0.9 + wristTaper * 0.1;
+            p.z *= 0.9 + wristTaper * 0.1;
+          } else {
+            float fingerIndex = 0.0;
+            float segStart = 0.46;
+            float segEnd = 0.56;
+            if (a >= 0.56 && a < 0.67) {
+              fingerIndex = 1.0;
+              segStart = 0.56;
+              segEnd = 0.67;
+            } else if (a >= 0.67 && a < 0.78) {
+              fingerIndex = 2.0;
+              segStart = 0.67;
+              segEnd = 0.78;
+            } else if (a >= 0.78 && a < 0.89) {
+              fingerIndex = 3.0;
+              segStart = 0.78;
+              segEnd = 0.89;
+            } else if (a >= 0.89) {
+              fingerIndex = 4.0;
+              segStart = 0.89;
+              segEnd = 1.0;
+            }
+
+            float localFinger = clamp((a - segStart) / max(0.0001, segEnd - segStart), 0.0, 1.0);
+            float fingerCurl = handFingerCurlsA.x;
+            if (fingerIndex > 0.5 && fingerIndex < 1.5) {
+              fingerCurl = handFingerCurlsA.y;
+            } else if (fingerIndex > 1.5 && fingerIndex < 2.5) {
+              fingerCurl = handFingerCurlsA.z;
+            } else if (fingerIndex > 2.5 && fingerIndex < 3.5) {
+              fingerCurl = handFingerCurlsA.w;
+            } else if (fingerIndex > 3.5) {
+              fingerCurl = handFingerCurlB;
+            }
+
+            float baseX = -3.3;
+            float baseY = -0.55;
+            float baseZ = 0.2;
+            float length = 5.0;
+            float radiusBase = 0.95;
+            if (fingerIndex > 0.5 && fingerIndex < 1.5) {
+              baseX = -1.25;
+              baseY = 0.95;
+              baseZ = 1.1;
+              length = 6.4;
+              radiusBase = 0.72;
+            } else if (fingerIndex > 1.5 && fingerIndex < 2.5) {
+              baseX = 0.35;
+              baseY = 1.25;
+              baseZ = 1.35;
+              length = 7.0;
+              radiusBase = 0.75;
+            } else if (fingerIndex > 2.5 && fingerIndex < 3.5) {
+              baseX = 1.75;
+              baseY = 1.05;
+              baseZ = 1.05;
+              length = 6.5;
+              radiusBase = 0.7;
+            } else if (fingerIndex > 3.5) {
+              baseX = 3.05;
+              baseY = 0.7;
+              baseZ = 0.75;
+              length = 5.6;
+              radiusBase = 0.64;
+            }
+
+            float ringFinger = b * 6.28318;
+            float radiusFinger = radiusBase * (1.0 - 0.55 * localFinger);
+            float bend = clamp(fingerCurl, 0.0, 1.0) * (0.45 + localFinger * localFinger * 1.35);
+            float along = localFinger * length;
+
+            float thumbYaw = fingerIndex < 0.5 ? -0.68 : 0.0;
+            float forwardX = cos(thumbYaw) * cos(bend);
+            float forwardY = sin(bend) * (fingerIndex < 0.5 ? 0.75 : 1.0);
+            float forwardZ = sin(thumbYaw) * cos(bend);
+
+            p.x = baseX + forwardX * along + cos(ringFinger) * radiusFinger;
+            p.y = baseY + forwardY * along + sin(ringFinger) * radiusFinger * 0.85;
+            p.z = baseZ + forwardZ * along + sin(ringFinger + t * 0.25 + localFinger * 3.0) * radiusFinger * 1.25;
+            p.x += sin(t * 1.15 + localFinger * 12.0 + fingerIndex * 1.4) * 0.22;
+            p.y += cos(t * 1.08 + localFinger * 10.0 + fingerIndex * 1.2) * 0.2;
+            p.z += sin(t * 0.9 + localFinger * 13.0 + fingerIndex * 0.8) * 0.22;
+          }
         }
         return p;
       }
@@ -852,13 +1007,18 @@ export class ParticleWizardRuntime {
           return;
         }
 
+        float handsModeMix = (currentMode == 10 || targetMode == 10) ? 1.0 : 0.0;
+        float presence = clamp(handPresence, 0.0, 1.0);
+        float motionPresence = mix(1.0, presence, handsModeMix);
+        vAlphaGain = mix(1.0, 0.22 + 0.78 * presence, handsModeMix);
+
         pos.x *= mix(1.0, -1.0, rightSide);
         pos.x += mix(-modelSeparation, modelSeparation, rightSide);
 
         float normalizedFingerSignal = clamp(handFingerSignal, 0.0, 1.0);
         float sideScale = handScale * (1.0 + normalizedFingerSignal * 0.35);
-        pos = pos * (1.0 + sideScale * 0.45) + handOffset * 3.5;
-        pos += normalize(pos) * bassPump * 1.8;
+        pos = pos * (1.0 + sideScale * 0.45 * motionPresence) + handOffset * 3.5 * motionPresence;
+        pos += normalize(pos + vec3(0.001)) * bassPump * (1.8 * mix(1.0, 0.4 + 0.6 * presence, handsModeMix));
         vec4 mvPos = modelViewMatrix * vec4(pos, 1.0);
         float sizeRaw = 4.2 * (420.0 / -mvPos.z) * (1.0 + bassPump * 2.5 + 0.4 * sin(time * 6.0 + p1 * 30.0));
         gl_PointSize = clamp(sizeRaw, 1.2, 9.5);
@@ -870,6 +1030,7 @@ export class ParticleWizardRuntime {
       uniform float bassPump;
       varying vec3 vColor;
       varying float vVisible;
+      varying float vAlphaGain;
       void main() {
         if (vVisible < 0.5) {
           discard;
@@ -880,7 +1041,7 @@ export class ParticleWizardRuntime {
           discard;
         }
         float alpha = pow(max(0.0, 1.0 - d * 2.2), 3.2);
-        gl_FragColor = vec4(vColor, alpha * (0.85 + bassPump * 0.4));
+        gl_FragColor = vec4(vColor, alpha * (0.85 + bassPump * 0.4) * vAlphaGain);
       }
     `;
 
@@ -949,6 +1110,18 @@ export class ParticleWizardRuntime {
     this.starGeometry = geometry;
     this.stars = stars;
     this.scene.add(stars);
+  }
+
+  private applyBackgroundState(): void {
+    if (!this.renderer) {
+      return;
+    }
+
+    const clearColor = this.backgroundStarsEnabled ? this.backgroundColor : "#000000";
+    this.renderer.setClearColor(clearColor, 1);
+    if (this.stars) {
+      this.stars.visible = this.backgroundStarsEnabled;
+    }
   }
 
   private attachPointerControls(): void {
@@ -1044,12 +1217,16 @@ export class ParticleWizardRuntime {
     this.rightParticleUniforms.time.value = this.globalTime;
 
     this.handController.update(dt, this.globalTime);
+    this.handUiState = this.handController.getUiState();
     const leftHandOffset = this.handController.getLeftOffset();
     const rightHandOffset = this.handController.getRightOffset();
     const leftHandScale = this.handController.getLeftScale();
     const rightHandScale = this.handController.getRightScale();
     const leftFingerSignal = this.handController.getLeftFingerSignal();
     const rightFingerSignal = this.handController.getRightFingerSignal();
+    const leftFingerCurls = this.handController.getLeftFingerCurls();
+    const rightFingerCurls = this.handController.getRightFingerCurls();
+    const singleRole = this.handController.getSingleRole();
 
     this.leftCenter.set(-MODEL_SEPARATION + leftHandOffset.x, leftHandOffset.y, leftHandOffset.z);
     this.rightCenter.set(MODEL_SEPARATION + rightHandOffset.x, rightHandOffset.y, rightHandOffset.z);
@@ -1058,12 +1235,42 @@ export class ParticleWizardRuntime {
     this.leftParticleUniforms.handOffset.value.set(leftHandOffset.x, leftHandOffset.y, leftHandOffset.z);
     this.leftParticleUniforms.handScale.value = leftHandScale;
     this.leftParticleUniforms.handFingerSignal.value = leftFingerSignal;
+    setFingerVectorA(this.leftParticleUniforms.handFingerCurlsA.value, leftFingerCurls);
+    this.leftParticleUniforms.handFingerCurlB.value = leftFingerCurls.pinky;
     this.leftParticleUniforms.sharedRatio.value = sharedRatio;
 
     this.rightParticleUniforms.handOffset.value.set(rightHandOffset.x, rightHandOffset.y, rightHandOffset.z);
     this.rightParticleUniforms.handScale.value = rightHandScale;
     this.rightParticleUniforms.handFingerSignal.value = rightFingerSignal;
+    setFingerVectorA(this.rightParticleUniforms.handFingerCurlsA.value, rightFingerCurls);
+    this.rightParticleUniforms.handFingerCurlB.value = rightFingerCurls.pinky;
     this.rightParticleUniforms.sharedRatio.value = sharedRatio;
+
+    const handsModeActive =
+      this.currentMode === PARTICLE_HANDS_MODE_INDEX || this.targetMode === PARTICLE_HANDS_MODE_INDEX;
+    let leftPresenceTarget = 1;
+    let rightPresenceTarget = 1;
+    if (handsModeActive) {
+      const activeHands = this.handUiState.handTrackingState === "active";
+      if (activeHands && this.handUiState.handMode === "dual") {
+        leftPresenceTarget = 1;
+        rightPresenceTarget = 1;
+      } else if (activeHands && this.handUiState.handMode === "single") {
+        leftPresenceTarget = singleRole === "left" ? 1 : 0;
+        rightPresenceTarget = singleRole === "right" ? 1 : 0;
+      } else {
+        leftPresenceTarget = 0;
+        rightPresenceTarget = 0;
+      }
+      this.leftPresence = this.leftPresence * 0.92 + leftPresenceTarget * 0.08;
+      this.rightPresence = this.rightPresence * 0.92 + rightPresenceTarget * 0.08;
+    } else {
+      this.leftPresence = 1;
+      this.rightPresence = 1;
+    }
+
+    this.leftParticleUniforms.handPresence.value = this.leftPresence;
+    this.rightParticleUniforms.handPresence.value = this.rightPresence;
 
     const leftHandDebug = this.handUiState.debug;
     leftHandDebug.sharedRatio = sharedRatio;
@@ -1221,6 +1428,8 @@ export class ParticleWizardRuntime {
       trailsText: this.trailsActive ? "ACTIVE" : "OFF",
       trailsActive: this.trailsActive,
       flowActive: this.flowActive,
+      backgroundStarsEnabled: this.backgroundStarsEnabled,
+      backgroundColor: this.backgroundColor,
       wizardActive: this.handUiState.wizardActive,
       statusText,
       statusColor,
@@ -1233,6 +1442,8 @@ export class ParticleWizardRuntime {
       micLevel: this.micLevel,
       handMode: this.handUiState.handMode,
       handTrackingState: this.handUiState.handTrackingState,
+      cameraState: this.handUiState.cameraState,
+      trackingStateDetail: this.handUiState.trackingStateDetail,
       handDebug: this.handUiState.debug,
       cameraDebug: {
         azimuth: this.curAz,

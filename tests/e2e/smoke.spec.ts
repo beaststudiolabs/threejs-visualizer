@@ -13,6 +13,7 @@ test("smoke: renders wizard canvas and control HUD", async ({ page }) => {
   await expect(page.getByTestId("transform-btn")).toBeVisible();
   await expect(page.getByTestId("flow-btn")).toBeVisible();
   await expect(page.getByTestId("trails-btn")).toBeVisible();
+  await expect(page.getByTestId("background-btn")).toBeVisible();
   await expect(page.getByTestId("mic-btn")).toBeVisible();
   await expect(page.getByTestId("fullscreen-btn")).toBeVisible();
   await expect(page.getByTestId("fps-slider")).toBeVisible();
@@ -44,4 +45,14 @@ test("smoke: renders wizard canvas and control HUD", async ({ page }) => {
   await page.getByTestId("transform-btn").click();
   await expect(page.getByTestId("mode-value")).toHaveText("MOBIUS");
   await expect(page.getByTestId("title-text")).toHaveText("PARTICLE WIZARD");
+});
+
+test("diagnostic: tracker off keeps webcam visible while hand tracking is disabled", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto("/?testMode=1&tracker=off", { waitUntil: "domcontentloaded" });
+
+  await expect(page.getByTestId("webcam-container")).toBeVisible();
+  await expect(page.getByTestId("status-line")).toHaveText("Camera active - hand tracking unavailable.");
+  await expect(page.getByTestId("debug-panel")).toContainText("Hand track: disabled | mode none");
+  await expect(page.getByTestId("debug-panel")).toContainText("Camera state: active | tracker detail disabled");
 });

@@ -1,5 +1,6 @@
 export type WizardQueryConfig = {
   testMode: boolean;
+  trackerMode: "default" | "off" | "mockfail" | "remote";
   seed: number;
   fixedTimeSec?: number;
   width?: number;
@@ -27,12 +28,27 @@ const parseHexColor = (params: URLSearchParams, key: string): string | undefined
   return /^#[0-9a-fA-F]{6}$/.test(normalized) ? normalized : undefined;
 };
 
+const parseTrackerMode = (params: URLSearchParams): WizardQueryConfig["trackerMode"] => {
+  const raw = (params.get("tracker") ?? "").toLowerCase();
+  if (raw === "off") {
+    return "off";
+  }
+  if (raw === "mockfail") {
+    return "mockfail";
+  }
+  if (raw === "remote") {
+    return "remote";
+  }
+  return "default";
+};
+
 export const parseWizardQuery = (search = window.location.search): WizardQueryConfig => {
   const params = new URLSearchParams(search);
   const seed = parseNumber(params, "seed") ?? 1337;
   const debugRaw = params.get("debug");
   return {
     testMode: params.get("testMode") === "1",
+    trackerMode: parseTrackerMode(params),
     debug: debugRaw === null ? true : debugRaw !== "0",
     seed,
     fixedTimeSec: parseNumber(params, "t"),

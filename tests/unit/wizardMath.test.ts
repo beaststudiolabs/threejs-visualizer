@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  computeFingerCurls,
   computeModePosition,
   computeSharedRatio,
   resolveSharedParticleAssignment,
@@ -88,12 +89,44 @@ describe("wizard math helpers", () => {
   });
 
   it("computes finite positions for every mode", () => {
-    for (let mode = 0; mode <= 9; mode += 1) {
+    for (let mode = 0; mode <= 10; mode += 1) {
       const sample = computeModePosition(mode, 1.25, 0.37, 0.81);
       expect(Number.isFinite(sample.x)).toBe(true);
       expect(Number.isFinite(sample.y)).toBe(true);
       expect(Number.isFinite(sample.z)).toBe(true);
     }
+  });
+
+  it("computes low curl for a near-straight finger chain", () => {
+    const landmarks = Array.from({ length: 21 }, () => ({ x: 0, y: 0, z: 0 }));
+    landmarks[1] = { x: -0.2, y: 0.2, z: 0 };
+    landmarks[2] = { x: -0.35, y: 0.4, z: 0 };
+    landmarks[3] = { x: -0.5, y: 0.6, z: 0 };
+    landmarks[4] = { x: -0.65, y: 0.8, z: 0 };
+    landmarks[5] = { x: 0.1, y: 0.1, z: 0 };
+    landmarks[6] = { x: 0.1, y: 0.4, z: 0 };
+    landmarks[7] = { x: 0.1, y: 0.7, z: 0 };
+    landmarks[8] = { x: 0.1, y: 1.0, z: 0 };
+
+    const curls = computeFingerCurls(landmarks);
+    expect(curls.index).toBeLessThan(0.1);
+    expect(curls.thumb).toBeLessThan(0.2);
+  });
+
+  it("computes higher curl when the finger bends inward", () => {
+    const landmarks = Array.from({ length: 21 }, () => ({ x: 0, y: 0, z: 0 }));
+    landmarks[5] = { x: 0.1, y: 0.1, z: 0 };
+    landmarks[6] = { x: 0.12, y: 0.34, z: 0 };
+    landmarks[7] = { x: 0.2, y: 0.5, z: 0 };
+    landmarks[8] = { x: 0.33, y: 0.32, z: 0 };
+    landmarks[9] = { x: 0.4, y: 0.1, z: 0 };
+    landmarks[10] = { x: 0.4, y: 0.4, z: 0 };
+    landmarks[11] = { x: 0.4, y: 0.7, z: 0 };
+    landmarks[12] = { x: 0.4, y: 1.0, z: 0 };
+
+    const curls = computeFingerCurls(landmarks);
+    expect(curls.index).toBeGreaterThan(0.35);
+    expect(curls.middle).toBeLessThan(0.12);
   });
 
   it("maps left and right hands with deterministic shared logic", () => {

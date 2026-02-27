@@ -264,3 +264,98 @@ Keep entries chronological. Each entry should capture:
   - `npm run verify` passes end-to-end.
 - Blockers:
   - None.
+
+## 2026-02-27 19:10 UTC - Background Button Toggle + Hold Color Picker
+
+- Stage: 1 wizard runtime/UI controls
+- Completed:
+  - Extended `ParticleWizardRuntime` HUD/public state with `backgroundStarsEnabled` and `backgroundColor`.
+  - Added runtime APIs `toggleBackgroundStars()` and `setBackgroundColor()` with forced-black behavior when starfield is OFF.
+  - Added renderer background application path to sync clear color + star visibility without rebuilding star geometry.
+  - Added bottom `BACKGROUND` button in `src/ui/App.tsx` with:
+    - short press starfield toggle
+    - long press (`325ms`) background color popout
+    - long-press suppression of short-press toggle
+  - Added background color popout (`background-color-popout`, `background-color-input`) and responsive styles.
+  - Updated e2e coverage:
+    - `tests/e2e/smoke.spec.ts` checks `background-btn` visibility
+    - `tests/e2e/export.spec.ts` checks short toggle, long-press popout, and color input update
+  - Updated docs:
+    - `docs/UI_SPEC.md`
+    - `docs/ARCHITECTURE.md`
+    - `docs/IMPLEMENTATION_STAGES.md`
+- Verification:
+  - `npm run typecheck` fails due pre-existing `HandWizardController` type errors unrelated to this feature.
+  - `npm run e2e -- --list tests/e2e/smoke.spec.ts tests/e2e/export.spec.ts` passes (tests parse/list correctly).
+  - Full Playwright execution blocked in this environment by Windows `EPERM` (`spawn EPERM` / `.last-run.json` lock).
+- Blockers:
+  - Environment-level Playwright process/file permission restrictions prevent full e2e execution.
+
+## 2026-02-27 19:20 UTC - Webcam/Tracker Reliability Recovery
+
+- Stage: wizard runtime resilience
+- Completed:
+  - Decoupled camera bootstrap from tracker bootstrap in `HandWizardController`.
+  - Added explicit health telemetry fields:
+    - `cameraState`
+    - `trackingStateDetail`
+  - Ensured tracker failures no longer hide webcam when camera stream is active.
+  - Added tracker diagnostics via query:
+    - `tracker=off`
+    - `tracker=mockfail`
+    - `tracker=remote`
+  - Upgraded `legacyMediaPipe` loader contract to typed load result with error codes:
+    - `assets-load-failed`
+    - `model-load-failed`
+    - `runtime-error`
+    - `disabled`
+  - Implemented local-first MediaPipe asset resolution (`/mediapipe/*`) with optional remote fallback.
+  - Added deterministic e2e scenario for tracker-off behavior in `tests/e2e/smoke.spec.ts`.
+  - Expanded unit coverage for init-time camera/tracker success and failure states.
+  - Updated architecture and UI docs for decoupled camera/tracker behavior and diagnostics.
+- Verification:
+  - Pending.
+- Blockers:
+  - Local mediapipe binaries are expected in `public/mediapipe/*`; environment is offline so assets were not fetched automatically in this pass.
+
+## 2026-02-27 19:55 UTC - 11th Mode `PARTICLE HANDS` (Per-Finger + Ghost Fade)
+
+- Stage: 1 wizard runtime/UI controls + hand telemetry refinement
+- Completed:
+  - Added 11th runtime mode label `PARTICLE HANDS` and kept existing transform cycling/dropdown behavior.
+  - Added deterministic finger-curl primitives in `src/wizard/math.ts`:
+    - `FingerCurls`
+    - `createZeroFingerCurls()`
+    - `computeFingerCurls()`
+    - `smoothFingerCurls()`
+  - Extended `computeModePosition()` parity coverage to include mode `10` simplified particle-hand geometry.
+  - Extended `HandWizardController` state and debug payloads with:
+    - smoothed per-side finger curls (`mappedFingerCurlsLeft`, `mappedFingerCurlsRight`)
+    - `singleRole` (`left`/`right`) with label-first resolution and mirrored-x fallback.
+  - Added controller getters:
+    - `getLeftFingerCurls()`
+    - `getRightFingerCurls()`
+    - `getSingleRole()`
+  - Implemented single-hand side targeting (tracked side active, missing side smoothing toward neutral) and curl decay during degraded tracking.
+  - Extended particle shader uniforms with:
+    - `handFingerCurlsA` (thumb/index/middle/ring)
+    - `handFingerCurlB` (pinky)
+    - `handPresence`
+  - Added shader branch `mode == 10` for stylized anatomical particle hands with per-finger curl articulation and flow noise.
+  - Added runtime presence smoothing (`0.08`) and ghost alpha floor (`0.22`) for `PARTICLE HANDS` while forcing presence `1` outside hands mode.
+  - Updated debug UI to show single-role and left/right curl telemetry.
+  - Updated tests:
+    - `tests/unit/wizardMath.test.ts` mode loop `0..10` + finger-curl cases
+    - `tests/unit/handWizardController.test.ts` single-role and curl-decay coverage
+    - `tests/e2e/export.spec.ts` mode count `11`, select `PARTICLE HANDS`, wrap to `SPHERICAL`.
+  - Updated docs:
+    - `docs/ARCHITECTURE.md`
+    - `docs/UI_SPEC.md`
+    - `docs/IMPLEMENTATION_STAGES.md`
+- Verification:
+  - `npm run typecheck` passes.
+  - `npm run test -- --run` passes (3 files, 24 tests).
+  - `npm run e2e -- --output playwright-results-temp tests/e2e/export.spec.ts` fails with Windows `EPERM` lock on `.last-run.json`.
+  - Retry with isolated output (`playwright-results-hands11`) fails in this environment with `spawn EPERM`.
+- Blockers:
+  - Playwright execution is blocked in this environment by OS-level `EPERM` process/file permission errors.

@@ -9,16 +9,20 @@ The active root experience is the Particle Wizard HUD (not the legacy dock layou
 - Center: Three.js canvas + animated title treatment.
 - Top-left: system telemetry card (particle count, FPS, mode, wizard status).
 - Top-right: `Advanced Dynamics` control panel.
-- Bottom-center: action controls (`TRANSFORM`, `FLOW`, `TRAILS`, mic, HUD toggle, fullscreen).
+- Bottom-center: action controls (`TRANSFORM`, `FLOW`, `TRAILS`, `BACKGROUND`, mic, HUD toggle, fullscreen).
 - Bottom-left: webcam preview (mirrored) with calibration overlay.
 - Bottom-right: full debug telemetry panel (toggleable, default ON).
 - Bottom-center (above controls): mic sensitivity popout (long-press mic button).
+- Bottom-center (above controls): background color popout (long-press `BACKGROUND` button).
 
 ### Webcam Calibration Overlay
 
 - The calibration marker is two open-palm outlines (left/right), positioned near webcam center.
 - Tracked hands render a green skeleton stick overlay in mirrored webcam space for both left and right palms when landmarks are available.
 - Tracking backend uses MediaPipe Tasks Vision (GPU-preferred, CPU fallback) through the wizard adapter layer.
+- Local asset strategy is primary (`/public/mediapipe/*`); remote fallback is optional via query diagnostics.
+- Webcam panel visibility follows camera stream availability, not tracker availability.
+- If tracker bootstrap fails but camera stream is active, webcam stays visible and status reports tracker unavailability.
 - Target checks use mirrored display space (`displayX = 1 - rawX`) so guidance matches the mirrored webcam.
 - Target anchors are intentionally separated (`x≈0.36` left, `x≈0.64` right) to improve hand placement clarity.
 - Left and right outlines light independently when each corresponding palm is inside its target zone.
@@ -28,7 +32,7 @@ The active root experience is the Particle Wizard HUD (not the legacy dock layou
 
 ### Advanced Dynamics Panel
 
-- Mode selector for all available morph modes.
+- Mode selector for all 11 available morph modes.
 - Palette color pickers:
   - `primary`
   - `secondary`
@@ -45,7 +49,15 @@ The active root experience is the Particle Wizard HUD (not the legacy dock layou
 - Actions:
   - reset hand calibration
   - debug panel toggle
-- Shape list reflects the additional 5 mathematical modes.
+- Shape list reflects the additional mathematical modes, including `PARTICLE HANDS`.
+
+### Particle Hands Mode
+
+- `PARTICLE HANDS` is the 11th transform mode and participates in normal `TRANSFORM` cycling.
+- Left/right hand movement controls corresponding particle-hand movement in `x/y/z`.
+- Finger articulation is per-finger (thumb/index/middle/ring/pinky) from live landmarks.
+- In single-hand tracking, the tracked side stays active while the untracked side fades to a neutral ghost.
+- During degraded tracking, hand presence fades smoothly instead of snapping.
 
 ### Camera Controls
 
@@ -59,6 +71,13 @@ The active root experience is the Particle Wizard HUD (not the legacy dock layou
 - Mic OFF fully releases stream/context.
 - Sensitivity range: `0.00..3.00` (step `0.05`).
 
+### Background UX
+
+- Short press `BACKGROUND` button: toggle starfield ON/OFF.
+- Long press `BACKGROUND` button (~325ms): open background color selector.
+- Long press does not trigger a starfield toggle.
+- When starfield is OFF, output background is forced to pure black (`#000000`).
+
 ### Query Parameter Defaults
 
 These URL params are applied on startup when provided:
@@ -66,6 +85,10 @@ These URL params are applied on startup when provided:
 - Visual: `glow`, `threshold`, `gain`
 - Palette: `primary`, `secondary`, `accent`
 - Debug visibility defaults to ON unless `debug=0`.
+- Tracker diagnostics:
+  - `tracker=off` forces tracker unavailable mode while keeping webcam preview active.
+  - `tracker=mockfail` simulates tracker bootstrap failure.
+  - `tracker=remote` enables optional remote asset fallback.
 
 ## Legacy Dock UI
 

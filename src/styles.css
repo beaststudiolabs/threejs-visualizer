@@ -215,10 +215,10 @@ button:hover {
   box-shadow: 0 0 30px #00ffff;
 }
 
-#mic-sensitivity-popout {
+#mic-sensitivity-popout,
+#background-color-popout {
   position: absolute;
   left: 50%;
-  bottom: 86px;
   transform: translateX(-50%);
   width: min(360px, calc(100vw - 40px));
   display: grid;
@@ -226,7 +226,15 @@ button:hover {
   z-index: 190;
 }
 
-.mic-popout-head {
+#mic-sensitivity-popout {
+  bottom: 86px;
+}
+
+#background-color-popout {
+  bottom: 218px;
+}
+
+.popout-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -235,6 +243,15 @@ button:hover {
 
 #mic-sensitivity-popout input[type="range"] {
   width: 100%;
+}
+
+#background-color-popout input[type="color"] {
+  width: 100%;
+  height: 36px;
+  border: 1px solid #00ffff88;
+  background: transparent;
+  border-radius: 2px;
+  padding: 0;
 }
 
 #webcam-container {
@@ -439,6 +456,11 @@ button:hover {
 
   #mic-sensitivity-popout {
     bottom: 116px;
+    width: calc(100vw - 20px);
+  }
+
+  #background-color-popout {
+    bottom: 252px;
     width: calc(100vw - 20px);
   }
 
